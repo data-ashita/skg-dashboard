@@ -37,6 +37,16 @@ def generate_template(cols):
     pd.DataFrame(columns=cols).to_excel(output, index=False)
     return output.getvalue()
 
+def get_latest_date_in_db(table_name):
+    try:
+        # 查询 Date 列，按倒序排列取第 1 条数据
+        res = supabase.table(table_name).select("Date").order("Date", desc=True).limit(1).execute()
+        if res.data:
+            return res.data[0]['Date']
+        return "No Data"
+    except Exception:
+        return "Error"
+
 # 获取当前选项
 ALLOWED_AR_TYPES, ALLOWED_WH_TYPES = get_dynamic_options()
 
@@ -45,13 +55,23 @@ st.title("📤 Data Management Center")
 # --- 3. 业务数据同步 (Transactional Data) ---
 st.header("1. Sync Transactional Data")
 
-stock_excel_cols = ["Stock Code", "Stock Name", "Warehouse Code", "Warehouse Name", "Quantity"]
+stock_excel_cols = ["Stock Code", "Stock Name", "Warehouse Code", "Warehouse Name", "Quantity","Date"]
 sales_excel_cols = ["CoID", "Invoice Number", "Stock Code", "Stock Name", "Quantity", "Unit Price", "Sales", "Date", "Warehouse", "Warehouse Name", "AR Code", "AR Name"]
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Sync Stock Table")
+    
+    # --- HTML 显示最新日期 (Stock) ---
+    stock_date = get_latest_date_in_db("stock")
+    st.markdown(f"""
+        <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 15px;">
+            <span style="color: #555; font-size: 0.9rem;">Latest Stock Snapshot:</span><br>
+            <strong style="color: #007bff; font-size: 1.2rem;">{stock_date}</strong>
+        </div>
+    """, unsafe_allow_html=True)
+    
     st.download_button("📥 Stock Template", generate_template(stock_excel_cols), "stock_template.xlsx")
     f_stock = st.file_uploader("Upload Stock Excel", type=['xlsx'], key="up_stock")
     
@@ -59,28 +79,59 @@ with col1:
         df = pd.read_excel(f_stock)
         df.columns = df.columns.str.strip()
         
-        # 匹配仓库类型 (双重匹配 Code + Name)
+        # --- 1. 格式清洗 ---
+        # 名字转大写（你的核心需求）
+        if 'Warehouse Name' in df.columns:
+            df['Warehouse Name'] = df['Warehouse Name'].astype(str).str.upper().str.strip()
+        
+        # 日期格式化 (确保一致性)
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        else:
+            st.error("❌ ERROR: Excel 中缺少 'Date' 列！")
+            st.stop()
+        
+        # --- 2. 匹配仓库类型 (保持原有逻辑) ---
         wh_ref = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
         if wh_ref.data:
             df_wh = pd.DataFrame(wh_ref.data)
+            df_wh['warehouse_name'] = df_wh['warehouse_name'].astype(str).str.upper().str.strip()
+            
             df = df.merge(df_wh, left_on=['Warehouse Code', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
             
             if not df[df['warehouse_type'].isna()].empty:
-                st.error("❌ ERROR: Warehouse Code/Name mismatch found in some rows!")
+                st.error("❌ ERROR: Warehouse Code/Name mismatch found!")
                 st.write(df[df['warehouse_type'].isna()][['Warehouse Code', 'Warehouse Name']])
                 st.stop()
             
+            # 重命名和清理多余列
             df = df.rename(columns={'warehouse_type': 'Warehouse Type'}).drop(columns=['warehouse_code', 'warehouse_name'])
         
         df = df.replace({np.nan: None})
+        
+        # --- 3. 核心防重逻辑：先按日期删除，再插入 ---
         try:
-            supabase.table("stock").upsert(df.to_dict(orient='records')).execute()
-            st.success("Stock synced successfully!")
+            unique_dates = df['Date'].unique().tolist()
+            with st.spinner(f"Updating Stock for: {unique_dates}"):
+                supabase.table("stock").delete().in_("Date", unique_dates).execute()
+                supabase.table("stock").insert(df.to_dict(orient='records')).execute()
+            st.success(f"Stock synced! Replaced data for {unique_dates}")
+            st.rerun() # 成功后强制刷新，更新顶部的最新日期显示
         except Exception as e:
             st.error(f"Sync failed: {e}")
 
 with col2:
     st.subheader("Sync Sales Table")
+    
+    # --- HTML 显示最新日期 (Sales) ---
+    sales_date = get_latest_date_in_db("sales")
+    st.markdown(f"""
+        <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; margin-bottom: 15px;">
+            <span style="color: #555; font-size: 0.9rem;">Latest Sales Data:</span><br>
+            <strong style="color: #ff4b4b; font-size: 1.2rem;">{sales_date}</strong>
+        </div>
+    """, unsafe_allow_html=True)
+    
     st.download_button("📥 Sales Template", generate_template(sales_excel_cols), "sales_template.xlsx")
     f_sales = st.file_uploader("Upload Sales Excel", type=['xlsx'], key="up_sales")
     
@@ -88,30 +139,53 @@ with col2:
         df = pd.read_excel(f_sales)
         df.columns = df.columns.str.strip()
         
-        # 1. 匹配 AR (Code + Name)
+        # --- 1. 格式清洗与优化 ---
+        # 名字转大写（你的核心需求）
+        if 'Warehouse Name' in df.columns:
+            df['Warehouse Name'] = df['Warehouse Name'].astype(str).str.upper().str.strip()
+        if 'AR Name' in df.columns:
+            df['AR Name'] = df['AR Name'].astype(str).str.upper().str.strip()
+        
+        # 强制日期格式化（非常重要，用于删除匹配）
+        if 'Date' in df.columns:
+            # 转换为 'YYYY-MM-DD' 字符串格式
+            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        else:
+            st.error("❌ ERROR: Excel 中缺少 'Date' 列")
+            st.stop()
+        
+        # --- 2. 匹配 AR 和 Warehouse 类型 (保持你原有的逻辑) ---
         ar_db = pd.DataFrame(supabase.table("ar").select("ar_code, ar_name, ar_type").execute().data)
+        ar_db['ar_name'] = ar_db['ar_name'].astype(str).str.upper().str.strip()
         df = df.merge(ar_db, left_on=['AR Code', 'AR Name'], right_on=['ar_code', 'ar_name'], how='left')
+        
         if not df[df['ar_type'].isna()].empty:
             st.error("❌ ERROR: AR Code/Name mismatch!")
             st.write(df[df['ar_type'].isna()][['AR Code', 'AR Name']])
             st.stop()
         
-        # 2. 匹配 Warehouse (Code + Name)
         wh_db = pd.DataFrame(supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute().data)
+        wh_db['warehouse_name'] = wh_db['warehouse_name'].astype(str).str.upper().str.strip()
         df = df.merge(wh_db, left_on=['Warehouse', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
+        
         if not df[df['warehouse_type'].isna()].empty:
             st.error("❌ ERROR: Warehouse mismatch!")
             st.write(df[df['warehouse_type'].isna()][['Warehouse', 'Warehouse Name']])
             st.stop()
             
+        # 清理列
         df = df.rename(columns={'ar_type': 'AR Type', 'warehouse_type': 'Warehouse Type'})
         df = df.drop(columns=['ar_code', 'ar_name', 'warehouse_code', 'warehouse_name'])
-        
-        if 'Date' in df.columns: df['Date'] = df['Date'].astype(str)
         df = df.replace({np.nan: None})
+        
+        # --- 3. 核心防重逻辑：先删除，再插入 ---
         try:
-            supabase.table("sales").upsert(df.to_dict(orient='records')).execute()
-            st.success("Sales synced successfully!")
+            unique_dates = df['Date'].unique().tolist()
+            with st.spinner(f"Processing Sales for: {unique_dates}"):
+                supabase.table("sales").delete().in_("Date", unique_dates).execute()
+                supabase.table("sales").insert(df.to_dict(orient='records')).execute()
+            st.success(f"Sales synced! Replaced {len(df)} rows.")
+            st.rerun() # 成功后强制刷新，更新顶部的最新日期显示
         except Exception as e:
             st.error(f"Sync failed: {e}")
 

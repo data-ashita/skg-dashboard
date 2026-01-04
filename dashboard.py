@@ -164,7 +164,19 @@ df_sales['Category'] = df_sales['Stock Name'].apply(extract_category)
 
 # 4.2 处理 Stock Data
 df_stock = df_stock_raw.copy()
-# 确保 Warehouse Type 存在，如果不存在填 Unknown
+
+# 【关键修改】：只提取最新一天的库存快照日期
+if not df_stock.empty and 'Date' in df_stock.columns:
+    # 转换为日期格式确保排序正确
+    df_stock['Date'] = pd.to_datetime(df_stock['Date'])
+    # 找到数据库里最新的库存日期
+    latest_stock_date = df_stock['Date'].max()
+    # 核心过滤：只保留最新一天的库存数据
+    df_stock = df_stock[df_stock['Date'] == latest_stock_date]
+    # 在侧边栏显示当前是哪一天的库存
+    st.sidebar.info(f"📦 Inventory Snapshot: {latest_stock_date.strftime('%Y-%m-%d')}")
+
+# 确保 Warehouse Type 存在 (保持原有逻辑)
 if 'Warehouse Type' not in df_stock.columns:
     df_stock['Warehouse Type'] = 'Unknown'
 else:
