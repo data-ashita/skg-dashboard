@@ -5,3 +5,4 @@ numpy
 supabase
 fpdf2
 kaleido
+openpyxl
