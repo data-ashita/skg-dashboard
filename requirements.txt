@@ -1,6 +1,7 @@
 streamlit
 pandas
 plotly
-openpyxl
 numpy
+supabase
+fpdf2
 kaleido
