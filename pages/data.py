@@ -89,15 +89,17 @@ ALLOWED_AR_TYPES, ALLOWED_WH_TYPES = get_dynamic_options()
 
 col1, col2 = st.columns(2)
 
-# --- COLUMN 1: STOCK TABLE SYNC ---
+# ==========================================
+# COLUMN 1: STOCK TABLE SYNC
+# ==========================================
 with col1:
     st.subheader("Sync Stock Table")
     
-    # HTML Card: Display Latest Record Date
+    # HTML 卡片：显示数据库最新日期
     latest_stock = get_latest_date("stock")
     st.markdown(f"""
         <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 15px;">
-            <span style="color: #555; font-size: 0.8rem;">Latest Stock Snapshot:</span><br>
+            <span style="color: #555; font-size: 0.9rem;">Latest Stock Snapshot:</span><br>
             <strong style="color: #007bff; font-size: 1.2rem;">{latest_stock}</strong>
         </div>
     """, unsafe_allow_html=True)
@@ -109,68 +111,75 @@ with col1:
         df = pd.read_excel(f_stock)
         df.columns = df.columns.str.strip()
         
-        # 1. Clean Data (Capitalize Names & Format Date)
+        # 1. 基础清洗：转大写、去空格、强制 Code 为字符串（防止匹配失败）
+        df['Warehouse Code'] = df['Warehouse Code'].astype(str).str.strip()
         if 'Warehouse Name' in df.columns:
             df['Warehouse Name'] = df['Warehouse Name'].astype(str).str.upper().str.strip()
+        
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
         else:
             st.error("❌ ERROR: 'Date' column is missing in Excel.")
             st.stop()
 
-        # 2. Match with Warehouse Master Data
-        wh_ref = pd.DataFrame(supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute().data)
+        # 2. 匹配仓库主表
+        wh_ref_raw = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
+        wh_ref = pd.DataFrame(wh_ref_raw.data)
+        
         if not wh_ref.empty:
+            wh_ref['warehouse_code'] = wh_ref['warehouse_code'].astype(str).str.strip()
             wh_ref['warehouse_name'] = wh_ref['warehouse_name'].astype(str).str.upper().str.strip()
+            # 匹配（基于 Code + Name 确保双重准确）
             df = df.merge(wh_ref, left_on=['Warehouse Code', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
         
-        # --- QUICK FIX: Mismatched Warehouse ---
+        # --- QUICK FIX: 处理缺失的仓库 ---
         mismatched_wh = df[df['warehouse_type'].isna()].copy()
         if not mismatched_wh.empty:
-            st.warning("⚠️ Mismatch Detected: New Warehouses found.")
-            st.info("💡 **Preview & Edit**: Use the trash icon to delete typos or select a Type from the dropdown.")
-            
+            st.warning("⚠️ Mismatch Detected: New Warehouses found in Excel.")
             missing_df = mismatched_wh[['Warehouse Code', 'Warehouse Name']].drop_duplicates()
             missing_df = missing_df.rename(columns={'Warehouse Code': 'warehouse_code', 'Warehouse Name': 'warehouse_name'})
             missing_df['warehouse_type'] = ALLOWED_WH_TYPES[0] if ALLOWED_WH_TYPES else ""
 
-            # Dynamic Editor for Quick Fix
+            # 数据编辑器：允许预览、修改 Type、删除无效项
             edited_fix = st.data_editor(
                 missing_df,
                 column_config={
-                    "warehouse_type": st.column_config.SelectboxColumn("Warehouse Type", options=ALLOWED_WH_TYPES, required=True),
+                    "warehouse_type": st.column_config.SelectboxColumn("Assign Type", options=ALLOWED_WH_TYPES, required=True),
                     "warehouse_code": "Code", "warehouse_name": "Name"
                 },
-                num_rows="dynamic", # Enables adding/deleting rows
-                hide_index=True, use_container_width=True, key="wh_fix_editor"
+                num_rows="dynamic", hide_index=True, use_container_width=True, key="wh_fix_stock"
             )
 
-            if st.button("➕ Confirm & Add to Master Data"):
+            if st.button("➕ Confirm & Add to Warehouse Master"):
                 if not edited_fix.empty:
-                    supabase.table("warehouse").insert(edited_fix.to_dict(orient='records')).execute()
+                    # 插入前二次清洗
+                    to_insert = edited_fix.copy()
+                    to_insert['warehouse_name'] = to_insert['warehouse_name'].astype(str).str.upper().str.strip()
+                    to_insert['warehouse_code'] = to_insert['warehouse_code'].astype(str).str.strip()
+                    supabase.table("warehouse").insert(to_insert.to_dict(orient='records')).execute()
                     st.success("Master Data updated! Please click 'Sync Stock Data' again.")
                     st.rerun()
-                else:
-                    st.error("No valid items to add.")
             st.stop()
 
-        # 3. Final Upload (Wipe & Reload)
+        # 3. 最终上传（按日期清空重载）
         try:
             df = df.rename(columns={'warehouse_type': 'Warehouse Type'}).drop(columns=['warehouse_code', 'warehouse_name'])
             unique_dates = df['Date'].unique().tolist()
-            with st.spinner("Replacing records..."):
+            with st.spinner(f"Replacing stock data for: {unique_dates}"):
                 supabase.table("stock").delete().in_("Date", unique_dates).execute()
                 supabase.table("stock").insert(df.replace({np.nan: None}).to_dict(orient='records')).execute()
-            st.success(f"Stock Synced! Replaced data for: {unique_dates}")
+            st.success(f"Stock Synced! (Dates updated: {unique_dates})")
             st.rerun()
         except Exception as e:
             st.error(f"Sync failed: {e}")
 
-# --- COLUMN 2: SALES TABLE SYNC ---
+# ==========================================
+# COLUMN 2: SALES TABLE SYNC
+# ==========================================
 with col2:
     st.subheader("Sync Sales Table")
     
-    # HTML Card: Display Latest Record Date
+    # HTML 卡片：显示数据库最新日期
     latest_sales = get_latest_date("sales")
     st.markdown(f"""
         <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; margin-bottom: 15px;">
@@ -186,18 +195,22 @@ with col2:
         df = pd.read_excel(f_sales)
         df.columns = df.columns.str.strip()
         
-        # 1. Clean Data (Uppercase names)
+        # 1. 基础清洗：强制 Code 为文本，名字转大写
+        df['AR Code'] = df['AR Code'].astype(str).str.strip()
+        df['Warehouse'] = df['Warehouse'].astype(str).str.strip() # 销售表中的仓库 Code
         for col in ['Warehouse Name', 'AR Name']:
             if col in df.columns: df[col] = df[col].astype(str).str.upper().str.strip()
-        if 'Date' in df.columns: df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
 
-        # 2. Match AR Master
+        # 2. 匹配 AR 主表
         ar_db = pd.DataFrame(supabase.table("ar").select("ar_code, ar_name, ar_type").execute().data)
         if not ar_db.empty:
+            ar_db['ar_code'] = ar_db['ar_code'].astype(str).str.strip()
             ar_db['ar_name'] = ar_db['ar_name'].astype(str).str.upper().str.strip()
             df = df.merge(ar_db, left_on=['AR Code', 'AR Name'], right_on=['ar_code', 'ar_name'], how='left')
 
-        # --- QUICK FIX: Missing AR ---
+        # --- QUICK FIX 1: 缺失的客户 (AR) ---
         missing_ar_rows = df[df['ar_type'].isna()].copy()
         if not missing_ar_rows.empty:
             st.warning("⚠️ Mismatch Detected: New Customers (AR) found.")
@@ -215,15 +228,45 @@ with col2:
                 st.rerun()
             st.stop()
 
-        # 3. Final Sync (Delete & Insert)
+        # 3. 匹配仓库主表（Sales 表同样需要验证仓库）
+        wh_db = pd.DataFrame(supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute().data)
+        if not wh_db.empty:
+            wh_db['warehouse_code'] = wh_db['warehouse_code'].astype(str).str.strip()
+            wh_db['warehouse_name'] = wh_db['warehouse_name'].astype(str).str.upper().str.strip()
+            # 注意：Sales 表中左表列名是 'Warehouse' (Code) 和 'Warehouse Name'
+            df = df.merge(wh_db, left_on=['Warehouse', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
+
+        # --- QUICK FIX 2: 缺失的仓库 (Warehouse) ---
+        missing_wh_sales = df[df['warehouse_type'].isna()].copy()
+        if not missing_wh_sales.empty:
+            st.warning("⚠️ Mismatch Detected: New Warehouses found in Sales Data.")
+            missing_wh_s_df = missing_wh_sales[['Warehouse', 'Warehouse Name']].drop_duplicates()
+            missing_wh_s_df = missing_wh_s_df.rename(columns={'Warehouse': 'warehouse_code', 'Warehouse Name': 'warehouse_name'})
+            missing_wh_s_df['warehouse_type'] = ALLOWED_WH_TYPES[0] if ALLOWED_WH_TYPES else ""
+
+            edited_wh_s = st.data_editor(
+                missing_wh_s_df,
+                column_config={"warehouse_type": st.column_config.SelectboxColumn("WH Type", options=ALLOWED_WH_TYPES, required=True)},
+                num_rows="dynamic", hide_index=True, key="wh_s_fix_editor"
+            )
+            if st.button("➕ Quick Add to Warehouse Master (from Sales)"):
+                supabase.table("warehouse").insert(edited_wh_s.to_dict(orient='records')).execute()
+                st.rerun()
+            st.stop()
+
+        # 4. 最终上传（按日期清空重载）
         try:
-            # Re-matching Warehouse and final clean up here...
-            # (Logic similar to Stock sync, simplified for brevity)
+            # 整理 DataFrame：重命名并删除匹配辅助列
+            df = df.rename(columns={'ar_type': 'AR Type', 'warehouse_type': 'Warehouse Type'})
+            # 删除多余的 master data 列
+            drop_cols = ['ar_code', 'ar_name', 'warehouse_code', 'warehouse_name']
+            df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+            
             unique_dates = df['Date'].unique().tolist()
-            with st.spinner("Processing..."):
+            with st.spinner(f"Replacing sales data for: {unique_dates}"):
                 supabase.table("sales").delete().in_("Date", unique_dates).execute()
-                # Final insert logic...
-            st.success("Sales Synced Successfully!")
+                supabase.table("sales").insert(df.replace({np.nan: None}).to_dict(orient='records')).execute()
+            st.success(f"Sales Synced! (Dates updated: {unique_dates})")
             st.rerun()
         except Exception as e:
             st.error(f"Sync failed: {e}")
