@@ -107,51 +107,70 @@ if not check_password():
 @st.cache_data(ttl=600) # 每10分钟清理一次缓存，或手动刷新
 def load_data_from_supabase():
     try:
-        # 1. 加载主表并清洗空格
-        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_type").execute()
+        # 1. 加载主表 (必须包含 Name, Code, Type 三个字段)
+        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
         df_wh_master = pd.DataFrame(wh_res.data)
         if not df_wh_master.empty:
-            df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip()
+            # 清洗：去空格 + 转大写 (Code 建议转大写，Name 建议只去空格)
+            df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip().str.upper()
+            df_wh_master['warehouse_name'] = df_wh_master['warehouse_name'].astype(str).str.strip()
             df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip()
 
-        ar_res = supabase.table("ar").select("ar_code, ar_type").execute()
+        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").execute()
         df_ar_master = pd.DataFrame(ar_res.data)
         if not df_ar_master.empty:
-            df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip()
+            df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip().str.upper()
+            df_ar_master['ar_name'] = df_ar_master['ar_name'].astype(str).str.strip()
             df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
 
-        # 2. 读取库存表并清洗空格
+        # 2. 读取库存表并清洗
         stock_response = supabase.table("stock_details").select("*").execute()
         df_stock = pd.DataFrame(stock_response.data)
         if not df_stock.empty:
-            df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip()
-            # 同样清洗原始类型，防止它本身就有数据但带空格
-            if 'warehouse_type' in df_stock.columns:
-                df_stock['warehouse_type'] = df_stock['warehouse_type'].astype(str).str.strip()
-        
-        # --- 关联主表 ---
-        if not df_wh_master.empty and not df_stock.empty:
-            wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
-            df_stock = pd.merge(df_stock, wh_m, left_on='Warehouse Code', right_on='warehouse_code', how='left')
-            # 填补类型
-            df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock['warehouse_type'])
+            df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip().str.upper()
+            df_stock['Warehouse Name'] = df_stock['Warehouse Name'].astype(str).str.strip()
+            
+            # --- 关联主表 (使用组合键: Name + Code) ---
+            if not df_wh_master.empty:
+                wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
+                df_stock = pd.merge(
+                    df_stock, wh_m, 
+                    left_on=['Warehouse Code', 'Warehouse Name'], 
+                    right_on=['warehouse_code', 'warehouse_name'], 
+                    how='left'
+                )
+                # 优先使用主表类型
+                df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock['warehouse_type'])
 
         # 3. 读取销售表并清洗
         sales_response = supabase.table("sales_details").select("*").execute()
         df_sales = pd.DataFrame(sales_response.data)
         if not df_sales.empty:
-            df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip()
-            df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip()
+            df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip().str.upper()
+            df_sales['Warehouse Name'] = df_sales['Warehouse Name'].astype(str).str.strip()
+            df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip().str.upper()
+            df_sales['AR Name'] = df_sales['AR Name'].astype(str).str.strip()
 
-        # --- 销售表关联 (仓库 + AR) ---
-        if not df_sales.empty:
+            # --- 关联仓库 (Name + Code) ---
             if not df_wh_master.empty:
                 wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
-                df_sales = pd.merge(df_sales, wh_m, left_on='Warehouse Code', right_on='warehouse_code', how='left')
+                df_sales = pd.merge(
+                    df_sales, wh_m, 
+                    left_on=['Warehouse Code', 'Warehouse Name'], 
+                    right_on=['warehouse_code', 'warehouse_name'], 
+                    how='left'
+                )
                 df_sales['warehouse_type'] = df_sales['Master_WH_Type'].fillna(df_sales['warehouse_type'])
+
+            # --- 关联 AR (Name + Code) ---
             if not df_ar_master.empty:
                 ar_m = df_ar_master.rename(columns={'ar_type': 'Master_AR_Type'})
-                df_sales = pd.merge(df_sales, ar_m, left_on='AR Code', right_on='ar_code', how='left')
+                df_sales = pd.merge(
+                    df_sales, ar_m, 
+                    left_on=['AR Code', 'AR Name'], 
+                    right_on=['ar_code', 'ar_name'], 
+                    how='left'
+                )
                 df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales['ar_type'])
 
         # 4. 统一重命名
