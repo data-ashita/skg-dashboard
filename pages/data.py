@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from supabase import create_client
-import io
 
 # --- 1. 页面配置 ---
-st.set_page_config(page_title="SKG Data Management", layout="wide")
+st.set_page_config(page_title="SKG Master Data Management", layout="wide")
 
-# 检查登录状态 (确保主页已处理登录逻辑)
+# 检查登录状态
 if "password_correct" not in st.session_state or not st.session_state["password_correct"]:
     st.warning("Please login on the Home page first.")
     st.stop()
@@ -18,10 +17,10 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- 2. 辅助函数 ---
+# --- 2. 核心数据获取函数 ---
 
-# 获取动态下拉选项
 def get_dynamic_options():
+    """获取 AR 和 Warehouse 的类型下拉选项"""
     try:
         ar_types = supabase.table("ar_type_settings").select("type_name").execute()
         wh_types = supabase.table("wh_type_settings").select("type_name").execute()
@@ -31,315 +30,203 @@ def get_dynamic_options():
     except:
         return [], []
 
-# 生成 Excel 模板
-def generate_template(cols):
-    output = io.BytesIO()
-    pd.DataFrame(columns=cols).to_excel(output, index=False)
-    return output.getvalue()
-
-def get_latest_date_in_db(table_name):
-    try:
-        # 查询 Date 列，按倒序排列取第 1 条数据
-        res = supabase.table(table_name).select("Date").order("Date", desc=True).limit(1).execute()
-        if res.data:
-            return res.data[0]['Date']
-        return "No Data"
-    except Exception:
-        return "Error"
-
-# 获取当前选项
+# 获取最新选项
 ALLOWED_AR_TYPES, ALLOWED_WH_TYPES = get_dynamic_options()
 
-st.title("📤 Data Management Center")
+# --- 3. 界面标题 ---
+st.title("⚙️ Master Data Management")
+st.markdown("Maintain customer (AR) and warehouse categories to ensure reporting accuracy.")
 
-# --- 3. 业务数据同步 (Transactional Data) ---
-st.header("1. Sync Transactional Data")
-
-# Define columns for Excel templates
-stock_excel_cols = ["Date", "Stock Code", "Stock Name", "Warehouse Code", "Warehouse Name", "Quantity"]
-sales_excel_cols = ["CoID", "Invoice Number", "Stock Code", "Stock Name", "Quantity", "Unit Price", "Sales", "Date", "Warehouse", "Warehouse Name", "AR Code", "AR Name"]
-
-# Helper function to get latest date (Internal function)
-def get_latest_date(table_name):
+def handle_quick_add():
     try:
-        res = supabase.table(table_name).select("Date").order("Date", desc=True).limit(1).execute()
-        return res.data[0]['Date'] if res.data else "No Data"
-    except:
-        return "Unknown"
-
-col1, col2 = st.columns(2)
-
-# --- STOCK TABLE SYNC ---
-st.header("1. Sync Transactional Data")
-
-# Define columns for Excel templates
-stock_excel_cols = ["Date", "Stock Code", "Stock Name", "Warehouse Code", "Warehouse Name", "Quantity"]
-sales_excel_cols = ["CoID", "Invoice Number", "Stock Code", "Stock Name", "Quantity", "Unit Price", "Sales", "Date", "Warehouse", "Warehouse Name", "AR Code", "AR Name"]
-
-# Helper function to get latest date from DB
-def get_latest_date(table_name):
-    try:
-        res = supabase.table(table_name).select("Date").order("Date", desc=True).limit(1).execute()
-        return res.data[0]['Date'] if res.data else "No Data"
-    except:
-        return "Unknown"
-
-# Fetch latest options for types
-ALLOWED_AR_TYPES, ALLOWED_WH_TYPES = get_dynamic_options()
-
-col1, col2 = st.columns(2)
-
-# ==========================================
-# COLUMN 1: STOCK TABLE SYNC
-# ==========================================
-with col1:
-    st.subheader("Sync Stock Table")
-    
-    # HTML 卡片：显示数据库最新日期
-    latest_stock = get_latest_date("stock")
-    st.markdown(f"""
-        <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 15px;">
-            <span style="color: #555; font-size: 0.9rem;">Latest Stock Snapshot:</span><br>
-            <strong style="color: #007bff; font-size: 1.2rem;">{latest_stock}</strong>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    st.download_button("📥 Download Stock Template", generate_template(stock_excel_cols), "stock_template.xlsx")
-    f_stock = st.file_uploader("Upload Stock Excel", type=['xlsx'], key="up_stock")
-    
-    if f_stock and st.button("Sync Stock Data"):
-        df = pd.read_excel(f_stock)
-        df.columns = df.columns.str.strip()
+        # 1. 抓取交易数据中缺失类型的组合
+        wh_res = supabase.table("stock_details").select('"Warehouse Code", "Warehouse Name"')\
+            .is_("warehouse_type", "null").execute()
         
-        # 1. 基础清洗：转大写、去空格、强制 Code 为字符串（防止匹配失败）
-        df['Warehouse Code'] = df['Warehouse Code'].astype(str).str.strip()
-        if 'Warehouse Name' in df.columns:
-            df['Warehouse Name'] = df['Warehouse Name'].astype(str).str.upper().str.strip()
+        ar_res = supabase.table("sales_details").select('"AR Code", "AR Name"')\
+            .is_("ar_type", "null").execute()
+
+        # 2. 获取 Master 表数据，同时检查是否有 NULL Type
+        ex_wh_res = supabase.table("warehouse").select("warehouse_name, warehouse_code, warehouse_type").execute()
+        df_ex_wh = pd.DataFrame(ex_wh_res.data)
         
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-        else:
-            st.error("❌ ERROR: 'Date' column is missing in Excel.")
-            st.stop()
+        ex_ar_res = supabase.table("ar").select("ar_name, ar_code, ar_type").execute()
+        df_ex_ar = pd.DataFrame(ex_ar_res.data)
 
-        # 2. 匹配仓库主表
-        wh_ref_raw = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
-        wh_ref = pd.DataFrame(wh_ref_raw.data)
-        
-        if not wh_ref.empty:
-            wh_ref['warehouse_code'] = wh_ref['warehouse_code'].astype(str).str.strip()
-            wh_ref['warehouse_name'] = wh_ref['warehouse_name'].astype(str).str.upper().str.strip()
-            # 匹配（基于 Code + Name 确保双重准确）
-            df = df.merge(wh_ref, left_on=['Warehouse Code', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
-        
-        # --- QUICK FIX: 处理缺失的仓库 ---
-        mismatched_wh = df[df['warehouse_type'].isna()].copy()
-        if not mismatched_wh.empty:
-            st.warning("⚠️ Mismatch Detected: New Warehouses found in Excel.")
-            missing_df = mismatched_wh[['Warehouse Code', 'Warehouse Name']].drop_duplicates()
-            missing_df = missing_df.rename(columns={'Warehouse Code': 'warehouse_code', 'Warehouse Name': 'warehouse_name'})
-            missing_df['warehouse_type'] = ALLOWED_WH_TYPES[0] if ALLOWED_WH_TYPES else ""
+        # 记录需要执行的操作状态
+        missing_in_master = False # 是否有还没加进 Master 的
+        incomplete_in_master = False # Master 里是否有还没填 Type 的
 
-            # 数据编辑器：允许预览、修改 Type、删除无效项
-            edited_fix = st.data_editor(
-                missing_df,
-                column_config={
-                    "warehouse_type": st.column_config.SelectboxColumn("Assign Type", options=ALLOWED_WH_TYPES, required=True),
-                    "warehouse_code": "Code", "warehouse_name": "Name"
-                },
-                num_rows="dynamic", hide_index=True, use_container_width=True, key="wh_fix_stock"
-            )
+        # --- 处理 Warehouse ---
+        to_add_wh = []
+        if wh_res.data:
+            set_ex_wh = set(zip(df_ex_wh['warehouse_name'], df_ex_wh['warehouse_code'])) if not df_ex_wh.empty else set()
+            for _, r in pd.DataFrame(wh_res.data).drop_duplicates().iterrows():
+                if (r["Warehouse Name"], r["Warehouse Code"]) not in set_ex_wh:
+                    to_add_wh.append({"warehouse_name": r["Warehouse Name"], "warehouse_code": r["Warehouse Code"]})
 
-            if st.button("➕ Confirm & Add to Warehouse Master"):
-                if not edited_fix.empty:
-                    # 插入前二次清洗
-                    to_insert = edited_fix.copy()
-                    to_insert['warehouse_name'] = to_insert['warehouse_name'].astype(str).str.upper().str.strip()
-                    to_insert['warehouse_code'] = to_insert['warehouse_code'].astype(str).str.strip()
-                    supabase.table("warehouse").insert(to_insert.to_dict(orient='records')).execute()
-                    st.success("Master Data updated! Please click 'Sync Stock Data' again.")
-                    st.rerun()
-            st.stop()
+        # --- 处理 AR ---
+        to_add_ar = []
+        if ar_res.data:
+            set_ex_ar = set(zip(df_ex_ar['ar_name'], df_ex_ar['ar_code'])) if not df_ex_ar.empty else set()
+            for _, r in pd.DataFrame(ar_res.data).drop_duplicates().iterrows():
+                if (r["AR Name"], r["AR Code"]) not in set_ex_ar:
+                    to_add_ar.append({"ar_name": r["AR Name"], "ar_code": r["AR Code"]})
 
-        # 3. 最终上传（按日期清空重载）
-        try:
-            df = df.rename(columns={'warehouse_type': 'Warehouse Type'}).drop(columns=['warehouse_code', 'warehouse_name'])
-            unique_dates = df['Date'].unique().tolist()
-            with st.spinner(f"Replacing stock data for: {unique_dates}"):
-                supabase.table("stock").delete().in_("Date", unique_dates).execute()
-                supabase.table("stock").insert(df.replace({np.nan: None}).to_dict(orient='records')).execute()
-            st.success(f"Stock Synced! (Dates updated: {unique_dates})")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
+        # --- 检查 Master Table 里的空 Type ---
+        # 只要存在没加进去的，或者 Master 里有 NULL 的，都算有 Action
+        wh_null_count = df_ex_wh['warehouse_type'].isna().sum() if not df_ex_wh.empty else 0
+        ar_null_count = df_ex_ar['ar_type'].isna().sum() if not df_ex_ar.empty else 0
 
-# ==========================================
-# COLUMN 2: SALES TABLE SYNC
-# ==========================================
-with col2:
-    st.subheader("Sync Sales Table")
-    
-    # HTML 卡片：显示数据库最新日期
-    latest_sales = get_latest_date("sales")
-    st.markdown(f"""
-        <div style="background-color: #f0f2f6; padding: 10px 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; margin-bottom: 15px;">
-            <span style="color: #555; font-size: 0.9rem;">Latest Sales Record:</span><br>
-            <strong style="color: #ff4b4b; font-size: 1.2rem;">{latest_sales}</strong>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    st.download_button("📥 Download Sales Template", generate_template(sales_excel_cols), "sales_template.xlsx")
-    f_sales = st.file_uploader("Upload Sales Excel", type=['xlsx'], key="up_sales")
-    
-    if f_sales and st.button("Sync Sales Data"):
-        df = pd.read_excel(f_sales)
-        df.columns = df.columns.str.strip()
-        
-        # 1. 基础清洗：强制 Code 为文本，名字转大写
-        df['AR Code'] = df['AR Code'].astype(str).str.strip()
-        df['Warehouse'] = df['Warehouse'].astype(str).str.strip() # 销售表中的仓库 Code
-        for col in ['Warehouse Name', 'AR Name']:
-            if col in df.columns: df[col] = df[col].astype(str).str.upper().str.strip()
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-
-        # 2. 匹配 AR 主表
-        ar_db = pd.DataFrame(supabase.table("ar").select("ar_code, ar_name, ar_type").execute().data)
-        if not ar_db.empty:
-            ar_db['ar_code'] = ar_db['ar_code'].astype(str).str.strip()
-            ar_db['ar_name'] = ar_db['ar_name'].astype(str).str.upper().str.strip()
-            df = df.merge(ar_db, left_on=['AR Code', 'AR Name'], right_on=['ar_code', 'ar_name'], how='left')
-
-        # --- QUICK FIX 1: 缺失的客户 (AR) ---
-        missing_ar_rows = df[df['ar_type'].isna()].copy()
-        if not missing_ar_rows.empty:
-            st.warning("⚠️ Mismatch Detected: New Customers (AR) found.")
-            missing_ar_df = missing_ar_rows[['AR Code', 'AR Name']].drop_duplicates()
-            missing_ar_df = missing_ar_df.rename(columns={'AR Code': 'ar_code', 'AR Name': 'ar_name'})
-            missing_ar_df['ar_type'] = ALLOWED_AR_TYPES[0] if ALLOWED_AR_TYPES else ""
-
-            edited_ar = st.data_editor(
-                missing_ar_df,
-                column_config={"ar_type": st.column_config.SelectboxColumn("AR Type", options=ALLOWED_AR_TYPES, required=True)},
-                num_rows="dynamic", hide_index=True, key="ar_fix_editor"
-            )
-            if st.button("➕ Quick Add to AR Master"):
-                supabase.table("ar").insert(edited_ar.to_dict(orient='records')).execute()
+        # 3. 渲染通知
+        if to_add_wh:
+            st.warning(f"🔎 Found {len(to_add_wh)} new Warehouse combinations not in Master.")
+            if st.button("➕ Quick Add New Warehouses"):
+                supabase.table("warehouse").upsert(to_add_wh, on_conflict="warehouse_name, warehouse_code").execute()
                 st.rerun()
-            st.stop()
+            missing_in_master = True
 
-        # 3. 匹配仓库主表（Sales 表同样需要验证仓库）
-        wh_db = pd.DataFrame(supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute().data)
-        if not wh_db.empty:
-            wh_db['warehouse_code'] = wh_db['warehouse_code'].astype(str).str.strip()
-            wh_db['warehouse_name'] = wh_db['warehouse_name'].astype(str).str.upper().str.strip()
-            # 注意：Sales 表中左表列名是 'Warehouse' (Code) 和 'Warehouse Name'
-            df = df.merge(wh_db, left_on=['Warehouse', 'Warehouse Name'], right_on=['warehouse_code', 'warehouse_name'], how='left')
-
-        # --- QUICK FIX 2: 缺失的仓库 (Warehouse) ---
-        missing_wh_sales = df[df['warehouse_type'].isna()].copy()
-        if not missing_wh_sales.empty:
-            st.warning("⚠️ Mismatch Detected: New Warehouses found in Sales Data.")
-            missing_wh_s_df = missing_wh_sales[['Warehouse', 'Warehouse Name']].drop_duplicates()
-            missing_wh_s_df = missing_wh_s_df.rename(columns={'Warehouse': 'warehouse_code', 'Warehouse Name': 'warehouse_name'})
-            missing_wh_s_df['warehouse_type'] = ALLOWED_WH_TYPES[0] if ALLOWED_WH_TYPES else ""
-
-            edited_wh_s = st.data_editor(
-                missing_wh_s_df,
-                column_config={"warehouse_type": st.column_config.SelectboxColumn("WH Type", options=ALLOWED_WH_TYPES, required=True)},
-                num_rows="dynamic", hide_index=True, key="wh_s_fix_editor"
-            )
-            if st.button("➕ Quick Add to Warehouse Master (from Sales)"):
-                supabase.table("warehouse").insert(edited_wh_s.to_dict(orient='records')).execute()
+        if to_add_ar:
+            st.warning(f"🔎 Found {len(to_add_ar)} new AR combinations not in Master.")
+            if st.button("➕ Quick Add New AR Codes"):
+                supabase.table("ar").upsert(to_add_ar, on_conflict="ar_name, ar_code").execute()
                 st.rerun()
-            st.stop()
+            missing_in_master = True
 
-        # 4. 最终上传（按日期清空重载）
-        try:
-            # 整理 DataFrame：重命名并删除匹配辅助列
-            df = df.rename(columns={'ar_type': 'AR Type', 'warehouse_type': 'Warehouse Type'})
-            # 删除多余的 master data 列
-            drop_cols = ['ar_code', 'ar_name', 'warehouse_code', 'warehouse_name']
-            df = df.drop(columns=[c for c in drop_cols if c in df.columns])
-            
-            unique_dates = df['Date'].unique().tolist()
-            with st.spinner(f"Replacing sales data for: {unique_dates}"):
-                supabase.table("sales").delete().in_("Date", unique_dates).execute()
-                supabase.table("sales").insert(df.replace({np.nan: None}).to_dict(orient='records')).execute()
-            st.success(f"Sales Synced! (Dates updated: {unique_dates})")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
+        # 如果已经在 Master 里了，但是没填 Type，显示这个更显眼的提示
+        if wh_null_count > 0:
+            st.error(f"⚠️ {wh_null_count} Warehouses in Master Table are missing 'Warehouse Type'. Please fill them below!")
+            incomplete_in_master = True
+        
+        if ar_null_count > 0:
+            st.error(f"⚠️ {ar_null_count} Customers in Master Table are missing 'AR Type'. Please fill them below!")
+            incomplete_in_master = True
 
-st.divider()
+        # 只有以上两类问题都没有，才显示成功
+        if not missing_in_master and not incomplete_in_master:
+            st.success("✅ All combinations are correctly mapped and types are assigned.")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+handle_quick_add()
 
 # --- 4. 资料维护 (Master Data) ---
-st.header("2. Master Data Maintenance")
-tab_master, tab_settings = st.tabs(["AR & Warehouse List", "⚙️ Type Settings & Protection"])
+tab_master, tab_settings = st.tabs(["📦 AR & Warehouse Master", "🛠️ Type Settings & Protection"])
 
 with tab_master:
-    target = st.radio("Select Table:", ["ar", "warehouse"], horizontal=True)
-    res = supabase.table(target).select("*").execute()
+    # 1. 选择表
+    target = st.pills(
+        "Select Table to Manage:", 
+        options=["ar", "warehouse"], 
+        selection_mode="single",
+        default="ar",
+        format_func=lambda x: "👤 Customer (AR)" if x=="ar" else "📦 Warehouse List"
+    )
+    
+    if not target:
+        target = "ar"
+
+    # 获取对应表数据
+    res = supabase.table(target).select("*").order("id", desc=True).execute()
     df_m = pd.DataFrame(res.data)
     
     if df_m.empty:
-        if target == "ar": df_m = pd.DataFrame(columns=["id", "ar_name", "ar_code", "ar_type"])
-        else: df_m = pd.DataFrame(columns=["id", "warehouse_name", "warehouse_code", "warehouse_type"])
+        if target == "ar": 
+            df_m = pd.DataFrame(columns=["id", "ar_name", "ar_code", "ar_type"])
+        else: 
+            df_m = pd.DataFrame(columns=["id", "warehouse_name", "warehouse_code", "warehouse_type"])
 
-    # 下拉菜单配置
-    config = {
+    # 配置编辑器列
+    column_config = {
+        "id": st.column_config.NumberColumn("ID", help="System ID", disabled=True),
         "ar_type": st.column_config.SelectboxColumn("AR Type", options=ALLOWED_AR_TYPES, required=True),
-        "warehouse_type": st.column_config.SelectboxColumn("Warehouse Type", options=ALLOWED_WH_TYPES, required=True)
+        "warehouse_type": st.column_config.SelectboxColumn("Warehouse Type", options=ALLOWED_WH_TYPES, required=True),
+        "ar_code": st.column_config.TextColumn("AR Code", required=True),
+        "warehouse_code": st.column_config.TextColumn("Warehouse Code", required=True),
+        "ar_name": st.column_config.TextColumn("AR Name", required=True),
+        "warehouse_name": st.column_config.TextColumn("Warehouse Name", required=True)
     }
 
-    edited_m = st.data_editor(df_m, num_rows="dynamic", use_container_width=True, hide_index=True, column_config=config, key=f"ed_{target}")
+    st.subheader(f"Editing {target.upper()} Master Data")
     
-    if st.button(f"Save {target} Records"):
+    # 编辑表格
+    edited_m = st.data_editor(
+        df_m, 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        hide_index=True, 
+        column_config=column_config, 
+        key=f"ed_{target}",
+        height=800  
+    )
+    
+    if st.button(f"💾 Save {target.upper()} Changes", type="primary"):
         try:
-            supabase.table(target).upsert(edited_m.replace({np.nan: None}).to_dict(orient='records')).execute()
-            st.success("Master Table updated!")
+            # --- 核心优化部分 ---
+            # 1. 仅将 NaN 转换为 None (这是数据库兼容性必须的，不改变内容)
+            # 2. 直接转换为字典列表，不再循环遍历修改任何字符串内容
+            data_to_save = edited_m.replace({np.nan: None}).to_dict(orient='records')
+            
+            # 批量 Upsert 保存原始数据
+            supabase.table(target).upsert(data_to_save).execute()
+            
+            st.success(f"✅ {target.upper()} table updated successfully with original data!")
             st.rerun()
         except Exception as e:
             st.error(f"Save failed: {e}")
 
-# --- 5. 类型设置与删除保护 (Type Settings with Delete Protection) ---
+# --- 5. 类型设置与删除保护 ---
 with tab_settings:
-    st.subheader("Manage Dropdown Options")
-    st.info("Deleting a type will fail if it's currently used in AR or Warehouse records.")
+    st.subheader("Dropdown Option Settings")
+    st.info("💡 **Tip:** To protect data integrity, you cannot delete a type that is currently assigned to a customer or warehouse.")
     
-    type_target = st.radio("Select Settings:", ["AR Types", "Warehouse Types"], horizontal=True)
-    setting_table = "ar_type_settings" if type_target == "AR Types" else "wh_type_settings"
-    main_table = "ar" if type_target == "AR Types" else "warehouse"
-    type_col = "ar_type" if type_target == "AR Types" else "warehouse_type"
+    col1, col2 = st.columns(2)
     
-    # 获取当前设置
-    raw_types = supabase.table(setting_table).select("*").execute()
-    df_types = pd.DataFrame(raw_types.data)
+    # 动态处理两个设置表
+    setting_configs = [
+        {"label": "AR Types", "table": "ar_type_settings", "main": "ar", "col": "ar_type"},
+        {"label": "Warehouse Types", "table": "wh_type_settings", "main": "warehouse", "col": "warehouse_type"}
+    ]
     
-    edited_types = st.data_editor(df_types, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"ed_{setting_table}")
-    
-    if st.button(f"Update {type_target} List"):
-        # --- 删除保护逻辑 ---
-        # 1. 找出被删掉的行
-        original_names = set(df_types['type_name'].tolist())
-        current_names = set(edited_types['type_name'].tolist())
-        deleted_names = original_names - current_names
-        
-        if deleted_names:
-            # 2. 检查这些被删的 Type 是否正在被业务表使用
-            for name in deleted_names:
-                usage_check = supabase.table(main_table).select(type_col).eq(type_col, name).limit(1).execute()
-                if usage_check.data:
-                    st.error(f"❌ DELETE PROTECTION: Cannot delete '{name}'. It is currently assigned to records in the '{main_table}' table.")
-                    st.stop() # 终止操作
-        
-        # 3. 如果通过检查，则执行更新
-        try:
-            # 对于删除操作，supabase upsert 无法直接同步删除，建议清空再插或使用更复杂逻辑
-            # 这里简单处理：全量覆盖逻辑
-            # 注意：在生产环境删除通常建议增加 is_active 标记而非物理删除
-            supabase.table(setting_table).upsert(edited_types.to_dict(orient='records')).execute()
-            st.success(f"{type_target} list updated!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Update failed: {e}")
+    for i, cfg in enumerate(setting_configs):
+        with col1 if i == 0 else col2:
+            st.markdown(f"### {cfg['label']}")
+            raw = supabase.table(cfg['table']).select("*").execute()
+            df_types = pd.DataFrame(raw.data)
+            
+            edited_types = st.data_editor(
+                df_types, 
+                num_rows="dynamic", 
+                use_container_width=True, 
+                hide_index=True, 
+                key=f"ed_{cfg['table']}"
+            )
+            
+            if st.button(f"Update {cfg['label']}"):
+                # 删除保护逻辑
+                original_names = set(df_types['type_name'].tolist()) if not df_types.empty else set()
+                current_names = set(edited_types['type_name'].tolist())
+                deleted_names = original_names - current_names
+                
+                can_proceed = True
+                for name in deleted_names:
+                    usage_check = supabase.table(cfg['main']).select(cfg['col']).eq(cfg['col'], name).limit(1).execute()
+                    if usage_check.data:
+                        st.error(f"❌ Cannot delete '{name}': Currently in use.")
+                        can_proceed = False
+                        break
+                
+                if can_proceed:
+                    try:
+                        # 全量覆盖逻辑 (注意：Supabase upsert 不会自动物理删除未包含的行，
+                        # 这里如果涉及物理删除，建议先 delete 再 insert，或者增加 is_active 字段)
+                        # 为了安全，这里采用 upsert 逻辑
+                        supabase.table(cfg['table']).upsert(edited_types.to_dict(orient='records')).execute()
+                        st.success(f"{cfg['label']} updated!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Update failed: {e}")
+
+st.divider()
+st.caption("SKG Data Management System © 2026")

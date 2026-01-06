@@ -107,33 +107,67 @@ if not check_password():
 @st.cache_data(ttl=600) # 每10分钟清理一次缓存，或手动刷新
 def load_data_from_supabase():
     try:
-        # 4.1 读取 stock 表
-        stock_response = supabase.table("stock").select("*").execute()
-        df_stock = pd.DataFrame(stock_response.data)
-        
-        # 映射截图中的列名到代码使用的列名
-        # 截图显示字段为 'Warehouse Ty', 'Warehouse Na' 等
-        stock_rename = {
-            'Warehouse Ty': 'Warehouse Type',
-            'Warehouse Na': 'Warehouse Name',
-            'Warehouse Co': 'Warehouse Code'
-        }
-        df_stock = df_stock.rename(columns=stock_rename)
+        # 1. 加载主表并清洗空格
+        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_type").execute()
+        df_wh_master = pd.DataFrame(wh_res.data)
+        if not df_wh_master.empty:
+            df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip()
+            df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip()
 
-        # 4.2 读取 sales 表
-        sales_response = supabase.table("sales").select("*").execute()
-        df_sales = pd.DataFrame(sales_response.data)
+        ar_res = supabase.table("ar").select("ar_code, ar_type").execute()
+        df_ar_master = pd.DataFrame(ar_res.data)
+        if not df_ar_master.empty:
+            df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip()
+            df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
+
+        # 2. 读取库存表并清洗空格
+        stock_response = supabase.table("stock_details").select("*").execute()
+        df_stock = pd.DataFrame(stock_response.data)
+        if not df_stock.empty:
+            df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip()
+            # 同样清洗原始类型，防止它本身就有数据但带空格
+            if 'warehouse_type' in df_stock.columns:
+                df_stock['warehouse_type'] = df_stock['warehouse_type'].astype(str).str.strip()
         
-        # 映射截图中的列名
-        sales_rename = {
-            'Warehouse Na': 'Warehouse Name',
-            'Invoice Numb': 'Invoice Number'
+        # --- 关联主表 ---
+        if not df_wh_master.empty and not df_stock.empty:
+            wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
+            df_stock = pd.merge(df_stock, wh_m, left_on='Warehouse Code', right_on='warehouse_code', how='left')
+            # 填补类型
+            df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock['warehouse_type'])
+
+        # 3. 读取销售表并清洗
+        sales_response = supabase.table("sales_details").select("*").execute()
+        df_sales = pd.DataFrame(sales_response.data)
+        if not df_sales.empty:
+            df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip()
+            df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip()
+
+        # --- 销售表关联 (仓库 + AR) ---
+        if not df_sales.empty:
+            if not df_wh_master.empty:
+                wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
+                df_sales = pd.merge(df_sales, wh_m, left_on='Warehouse Code', right_on='warehouse_code', how='left')
+                df_sales['warehouse_type'] = df_sales['Master_WH_Type'].fillna(df_sales['warehouse_type'])
+            if not df_ar_master.empty:
+                ar_m = df_ar_master.rename(columns={'ar_type': 'Master_AR_Type'})
+                df_sales = pd.merge(df_sales, ar_m, left_on='AR Code', right_on='ar_code', how='left')
+                df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales['ar_type'])
+
+        # 4. 统一重命名
+        final_rename = {
+            'warehouse_type': 'Warehouse Type',
+            'ar_type': 'AR Type',
+            'Warehouse Name': 'Warehouse Name',
+            'Warehouse Code': 'Warehouse Code',
+            'Invoice Number': 'Invoice Number'
         }
-        df_sales = df_sales.rename(columns=sales_rename)
+        df_stock = df_stock.rename(columns=final_rename)
+        df_sales = df_sales.rename(columns=final_rename)
         
         return df_stock, df_sales
     except Exception as e:
-        st.error(f"Error connecting to Supabase: {e}")
+        st.error(f"Error: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
 df_stock_raw, df_sales_raw = load_data_from_supabase()
@@ -174,7 +208,7 @@ if not df_stock.empty and 'Date' in df_stock.columns:
     # 核心过滤：只保留最新一天的库存数据
     df_stock = df_stock[df_stock['Date'] == latest_stock_date]
     # 在侧边栏显示当前是哪一天的库存
-    st.sidebar.info(f"📦 Inventory Snapshot: {latest_stock_date.strftime('%Y-%m-%d')}")
+    st.sidebar.info(f"Inventory Updated: {latest_stock_date.strftime('%Y-%m-%d')}")
 
 # 确保 Warehouse Type 存在 (保持原有逻辑)
 if 'Warehouse Type' not in df_stock.columns:
@@ -249,6 +283,14 @@ date_range = st.sidebar.date_input(
     min_value=df_sales['Date'].min().date(),
     max_value=df_sales['Date'].max().date()
 )
+
+# 【核心修复】：检查是否选择了完整的日期范围
+if len(date_range) != 2:
+    st.warning("Please select a start and end date to continue.")
+    st.stop()  # 停止执行后续代码，直到用户选好第二个日期
+
+# 现在可以安全地解包了
+d1, d2 = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
 
 # --- 全局对比控制 ---
 st.sidebar.divider()
@@ -652,7 +694,7 @@ with tab1:
         # --- 3. Top 20 SKUs (增加 Filter Button) ---
         st.subheader("Top 20 SKUs Analysis")
         
-        # 定义分类按钮 (修复 NameError)
+        # 定义分类按钮
         stock_filter = st.pills(
             "Quick Filter:",
             options=["All", "Warehouse", "Consign", "Warehouse and Consign"],
@@ -660,18 +702,23 @@ with tab1:
             default="All"
         )
 
-        # 执行过滤逻辑
+        # 执行过滤逻辑 (使用你打印出来的全大写字符串)
         if stock_filter == "Warehouse":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'Warehouse']
+            # 匹配数据库中的 "WAREHOUSE"
+            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'WAREHOUSE']
         elif stock_filter == "Consign":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'Consign']
+            # 匹配数据库中的 "CONSIGN"
+            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'CONSIGN']
         elif stock_filter == "Warehouse and Consign":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'].isin(['Warehouse', 'Consign'])]
+            # 同时包含全大写的两类
+            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'].isin(['WAREHOUSE', 'CONSIGN'])]
         else:
+            # "All" 选项
             display_stock = df_stock_positive
 
+        # 检查过滤后是否为空
         if display_stock.empty:
-            st.info(f"No stock found for: {stock_filter}")
+            st.info(f"No stock found for: {stock_filter} (Check if the Type is correct in Master Data)")
         else:
             top_stock = display_stock.groupby('Stock Name')['Quantity'].sum().nlargest(20).reset_index().sort_values('Quantity', ascending=True)
             fig_bar = px.bar(top_stock, x='Quantity', y='Stock Name', orientation='h', text_auto=True, color='Quantity', color_continuous_scale='Blues')
@@ -745,7 +792,7 @@ with tab2:
 
     # --- 2. Filter Area (仅保留 Warehouse) ---
     with st.expander("🔎 Filter by Warehouse", expanded=False):
-        all_warehouses = df_sales['Warehouse'].unique()
+        all_warehouses = df_sales['Warehouse Name'].unique()
         selected_warehouses_sales = st.multiselect(
             "Select Warehouses:",
             options=all_warehouses,
@@ -755,8 +802,19 @@ with tab2:
             
     # --- 3. 数据预处理与核心逻辑 ---
     # A. 基础清洗 (防止分类/排序报错)
-    df_sales['AR Type'] = df_sales['AR Type'].fillna("Unknown").astype(str)
-    df_sales['Stock Name'] = df_sales['Stock Name'].fillna("Unknown").astype(str)
+    if 'AR Type' in df_sales.columns:
+        df_sales['AR Type'] = df_sales['AR Type'].fillna("Unknown").astype(str)
+    elif 'ar_type' in df_sales.columns:
+        # 万一重命名没生效，这里再做一次兜底
+        df_sales['AR Type'] = df_sales['ar_type'].fillna("Unknown").astype(str)
+    else:
+        # 如果实在找不到，就创建一个全为 "Unknown" 的列，保证后面图表不会报错
+        df_sales['AR Type'] = "Unknown"
+
+    if 'Stock Name' in df_sales.columns:
+        df_sales['Stock Name'] = df_sales['Stock Name'].fillna("Unknown").astype(str)
+    else:
+        df_sales['Stock Name'] = "Unknown"
     
     # B. 确定全局日期范围 (用于 Sparklines 提取不重复且连续的趋势)
     if len(date_range) == 2:
@@ -771,7 +829,7 @@ with tab2:
         mask_full = (
             (df_sales['Date'] >= start_full) & 
             (df_sales['Date'] <= end_full) & 
-            (df_sales['Warehouse'].isin(selected_warehouses_sales))
+            (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
         )
         df_trend_base = df_sales[mask_full].copy()
         df_trend_base['Month_Label'] = df_trend_base['Date'].dt.to_period('M').astype(str)
@@ -781,7 +839,7 @@ with tab2:
     mask_curr = (
         (df_sales['Date'] >= pd.to_datetime(date_range[0])) & 
         (df_sales['Date'] <= pd.to_datetime(date_range[1])) &
-        (df_sales['Warehouse'].isin(selected_warehouses_sales))
+        (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
     )
     df_curr = df_sales[mask_curr].copy()
 
@@ -791,7 +849,7 @@ with tab2:
         mask_comp = (
             (df_sales['Date'] >= pd.to_datetime(comp_range[0])) & 
             (df_sales['Date'] <= pd.to_datetime(comp_range[1])) &
-            (df_sales['Warehouse'].isin(selected_warehouses_sales))
+            (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
         )
         df_comp_sidebar = df_sales[mask_comp].copy()
 
@@ -842,22 +900,76 @@ with tab2:
         # PART 3: Warehouse Comparison (Section 2)
         # =========================================================
         st.subheader("2. Warehouse Comparison Breakdown")
-        wh_comp_df = trend_df.groupby(['Sort_Key', 'DP', 'Warehouse'])['Sales'].sum().reset_index().sort_values('Sort_Key')
-        chart_type = st.selectbox("Select Visualization Style:", ["Heatmap (Best for Overview)", "Small Charts (Best for Individual Trend)", "Multi-Line (Original)"], index=0, key='wh_view_select')
+        
+        wh_comp_df = trend_df.groupby(['Sort_Key', 'DP', 'Warehouse Name'])['Sales'].sum().reset_index().sort_values('Sort_Key')
         period_order = trend_data['DP'].unique()
 
-        if chart_type == "Heatmap (Best for Overview)":
-            fig_wh = px.density_heatmap(wh_comp_df, x='DP', y='Warehouse', z='Sales', histfunc="sum", color_continuous_scale="Viridis", text_auto=True)
+        # 定义一个符合图片风格的配色方案 (也可根据需要调整)
+        custom_colors = ['#1A3668', '#2CA02C', '#D62728', '#E377C2', '#17BECF', '#BCBD22', '#7F7F7F']
+
+        # 图表选择器：增加了 "Professional Line (Optimized)" 选项
+        chart_type = st.selectbox(
+            "Select Visualization Style:", 
+            ["Professional Line (Optimized)", "Heatmap (Best for Overview)", "Small Charts (Best for Individual Trend)"], 
+            index=0, 
+            key='wh_view_select'
+        )
+
+        if chart_type == "Professional Line (Optimized)":
+            fig_wh = px.line(
+                wh_comp_df, 
+                x='DP', 
+                y='Sales', 
+                color='Warehouse Name', 
+                category_orders={"DP": period_order},
+                color_discrete_sequence=custom_colors,
+                template="plotly_white"
+            )
+            
+            # 优化线条和悬停效果
+            fig_wh.update_traces(
+                line_width=2.5, 
+                mode='lines', # 【关键修复】：使用 mode='lines' 替代 markers=False
+                hovertemplate="Warehouse: %{fullData.name}<br>Revenue: RM%{y:,.2f}<extra></extra>"
+            )
+
+            # 优化布局配置
+            fig_wh.update_layout(
+                hovermode='x unified', 
+                height=500,
+                xaxis=dict(
+                    title="",
+                    showgrid=False,
+                    linecolor='#d6d6d6'
+                ),
+                yaxis=dict(
+                    title="Revenue (RM)",
+                    showgrid=True,
+                    gridcolor='#f0f0f0', 
+                    tickformat=".2s",    
+                    linecolor='#d6d6d6'
+                ),
+                legend=dict(
+                    orientation="h",     
+                    yanchor="bottom",
+                    y=-0.25,             
+                    xanchor="center",
+                    x=0.5,
+                    title=""
+                ),
+                margin=dict(t=20, b=100, l=40, r=40)
+            )
+            st.plotly_chart(fig_wh, use_container_width=True)
+
+        elif chart_type == "Heatmap (Best for Overview)":
+            fig_wh = px.density_heatmap(wh_comp_df, x='DP', y='Warehouse Name', z='Sales', histfunc="sum", color_continuous_scale="Viridis", text_auto=True)
             fig_wh.update_layout(xaxis=dict(type='category', categoryorder='array', categoryarray=period_order), height=500)
             st.plotly_chart(fig_wh, use_container_width=True)
-        elif chart_type == "Small Charts (Best for Individual Trend)":
-            fig_wh = px.line(wh_comp_df, x='DP', y='Sales', color='Warehouse', facet_col='Warehouse', facet_col_wrap=3, markers=True)
+            
+        else: # Small Charts (Best for Individual Trend)
+            fig_wh = px.line(wh_comp_df, x='DP', y='Sales', color='Warehouse Name', facet_col='Warehouse Name', facet_col_wrap=3, markers=True)
             fig_wh.update_yaxes(matches=None)
             fig_wh.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-            st.plotly_chart(fig_wh, use_container_width=True)
-        else:
-            fig_wh = px.line(wh_comp_df, x='DP', y='Sales', color='Warehouse', markers=True)
-            fig_wh.update_layout(xaxis=dict(type='category', categoryorder='array', categoryarray=period_order), height=450)
             st.plotly_chart(fig_wh, use_container_width=True)
 
         st.divider()
@@ -874,11 +986,137 @@ with tab2:
             fig_ar = px.bar(chan_data, x='AR Type', y='Sales', color='Month', barmode='group', text_auto='.2s', category_orders={"Month": sorted_months_chan}, color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_ar.update_layout(height=450, legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_ar, use_container_width=True)
-            
+                    
         with ar_col2:
-            st.caption("🏆 Top Customers (Full Selected Range)")
-            cust_detail = df_all_chan.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().sort_values('Sales', ascending=False).head(50)
-            st.dataframe(cust_detail, hide_index=True, use_container_width=True, height=400)
+            st.caption("🏆 Top Customers Analysis")
+            
+            # 1. 格式化日期字符串作为表头
+            # 主日期格式: "2023-10-01 ~ 2023-10-31"
+            p_label = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
+            
+            if not enable_comparison or df_comp_sidebar.empty:
+                # --- 情况 A: 正常模式 ---
+                cust_detail = df_curr.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index()
+                cust_detail = cust_detail.sort_values('Sales', ascending=False).head(50)
+                
+                st.dataframe(
+                    cust_detail, 
+                    hide_index=True, 
+                    use_container_width=True, 
+                    height=400,
+                    column_config={
+                        "Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")
+                    }
+                )
+            else:
+                # --- 情况 B: 对比模式 ---
+                # 对比日期格式
+                c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
+                
+                # 汇总数据
+                p_sales = df_curr.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
+                c_sales = df_comp_sidebar.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
+                
+                # 合并
+                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'AR Name'], how='outer').fillna(0)
+                cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
+                
+                # 排序：按主日期销量排序
+                cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
+                
+                st.dataframe(
+                    cust_detail,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        p_label: st.column_config.NumberColumn(p_label, format="RM%.2f"),
+                        c_label: st.column_config.NumberColumn(c_label, format="RM%.2f"),
+                        "Diff": st.column_config.NumberColumn("Difference", format="RM%.2f")
+                    }
+                )
+
+        st.subheader("3.1 Detailed Customer & Product Breakdown")
+        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+
+        dd_col1, dd_col2, dd_col3 = st.columns(3)
+
+        # --- 第一层：AR Type ---
+        with dd_col1:
+            st.markdown("**Step 1: Select AR Type**")
+            # 这里的列表顺序决定了默认显示顺序：Quantity 在 Sales 之前
+            type_summary = df_curr.groupby('AR Type')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+            
+            event_type = st.dataframe(
+                type_summary,
+                hide_index=True,
+                use_container_width=True,
+                height=300,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="dd_type_table",
+                column_config={
+                    "AR Type": st.column_config.TextColumn("Channel Type"),
+                    "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                    "Sales": st.column_config.NumberColumn("Total Sales", format="RM%.2f")
+                }
+            )
+
+        # --- 第二层：AR Name ---
+        selected_type = None
+        if event_type and event_type.selection.rows:
+            selected_index = event_type.selection.rows[0]
+            selected_type = type_summary.iloc[selected_index]['AR Type']
+
+        with dd_col2:
+            st.markdown(f"**Step 2: Customers in {selected_type if selected_type else '...'}**")
+            if selected_type:
+                name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                
+                event_name = st.dataframe(
+                    name_summary,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=300,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="dd_name_table",
+                    column_config={
+                        "AR Name": st.column_config.TextColumn("Customer Name"),
+                        "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                        "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                    }
+                )
+            else:
+                st.info("Please select an AR Type.")
+
+        # --- 第三层：Product ---
+        selected_name = None
+        if selected_type and 'event_name' in locals() and event_name and event_name.selection.rows:
+            selected_index_name = event_name.selection.rows[0]
+            selected_name = name_summary.iloc[selected_index_name]['AR Name']
+
+        with dd_col3:
+            st.markdown(f"**Step 3: Products for {selected_name if selected_name else '...'}**")
+            if selected_name:
+                product_summary = df_curr[
+                    (df_curr['AR Type'] == selected_type) & 
+                    (df_curr['AR Name'] == selected_name)
+                ].groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                
+                st.dataframe(
+                    product_summary,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=300,
+                    column_config={
+                        "Stock Name": st.column_config.TextColumn("Model Name"),
+                        "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                        "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                    }
+                )
+            else:
+                st.info("Please select a Customer.")
 
         st.divider()
         
@@ -897,7 +1135,7 @@ with tab2:
             st.caption(f"📊 Sales by Category ({curr_month_period})")
             cat_sales = df_sales[
                 (df_sales['Date'].dt.to_period('M') == curr_month_period) & 
-                (df_sales['Warehouse'].isin(selected_warehouses_sales))
+                (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
             ].groupby('Category')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
             fig_cat = px.pie(cat_sales, values='Sales', names='Category', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_cat.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
@@ -910,7 +1148,7 @@ with tab2:
             # 1. 先生成 top_m 数据
             top_m = df_sales[
                 (df_sales['Date'].dt.to_period('M') == curr_month_period) & 
-                (df_sales['Warehouse'].isin(selected_warehouses_sales))
+                (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
             ].groupby(['Stock Name', 'Category'])[['Quantity', 'Sales']].sum().reset_index().sort_values('Quantity', ascending=False).head(5)
             
             # 2. 生成数据后再计算安全的最大值
@@ -932,6 +1170,94 @@ with tab2:
                     }
                 )
 
+        # =========================================================
+        # PART 5.1: Product-to-Customer Drill-down (仅跟随主日期)
+        # =========================================================
+        st.markdown("---")
+        st.subheader("🔍 Product Sales Traceability")
+        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+
+        p_col1, p_col2, p_col3 = st.columns(3)
+
+        # --- 第一层：Stock Name (Model) ---
+        with p_col1:
+            st.markdown("**Step 1: Select Model**")
+            # 汇总 Units (Quantity) 和 Sales
+            model_summary = df_curr.groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+            
+            event_model = st.dataframe(
+                model_summary,
+                hide_index=True,
+                use_container_width=True,
+                height=400,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="dr_model_table",
+                column_config={
+                    "Stock Name": st.column_config.TextColumn("Model Name"),
+                    "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                    "Sales": st.column_config.NumberColumn("Total Sales", format="RM%.2f")
+                }
+            )
+
+        # --- 第二层：AR Type ---
+        selected_model = None
+        if event_model and event_model.selection.rows:
+            selected_index = event_model.selection.rows[0]
+            selected_model = model_summary.iloc[selected_index]['Stock Name']
+
+        with p_col2:
+            st.markdown(f"**Step 2: Channels for {selected_model if selected_model else '...'}**")
+            if selected_model:
+                # 过滤并汇总 Units 和 Sales
+                type_summary = df_curr[df_curr['Stock Name'] == selected_model].groupby('AR Type')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                
+                event_type_p = st.dataframe(
+                    type_summary,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="dr_type_p_table",
+                    column_config={
+                        "AR Type": st.column_config.TextColumn("Channel Type"),
+                        "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                        "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                    }
+                )
+            else:
+                st.info("Please select a Model.")
+
+        # --- 第三层：AR Name ---
+        selected_type_p = None
+        if selected_model and 'event_type_p' in locals() and event_type_p and event_type_p.selection.rows:
+            selected_index_type = event_type_p.selection.rows[0]
+            selected_type_p = type_summary.iloc[selected_index_type]['AR Type']
+
+        with p_col3:
+            st.markdown(f"**Step 3: Customers ( {selected_type_p if selected_type_p else '...'} )**")
+            if selected_type_p:
+                # 过滤并汇总 Units 和 Sales
+                customer_summary = df_curr[
+                    (df_curr['Stock Name'] == selected_model) & 
+                    (df_curr['AR Type'] == selected_type_p)
+                ].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                
+                st.dataframe(
+                    customer_summary,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "AR Name": st.column_config.TextColumn("Customer Name"),
+                        "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                        "Sales": st.column_config.NumberColumn("Customer Sales", format="RM%.2f")
+                    }
+                )
+            else:
+                st.info("Please select a Channel Type.")
+
         st.divider()
 
         # --- C. 下层：迷你趋势线表格 (优化全量历史趋势) ---
@@ -940,7 +1266,7 @@ with tab2:
         # 1. 准备【不受过滤影响】的趋势线列表
         df_full_history = df_sales[
             (df_sales['Date'].dt.to_period('M') <= curr_month_period) & 
-            (df_sales['Warehouse'].isin(selected_warehouses_sales))
+            (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
         ].copy()
         df_full_history['Month_Label'] = df_full_history['Date'].dt.to_period('M').astype(str)
         
@@ -956,12 +1282,12 @@ with tab2:
         # 2. 计算本月和上月 Qty
         p_curr = df_sales[
             (df_sales['Date'].dt.to_period('M') == curr_month_period) & 
-            (df_sales['Warehouse'].isin(selected_warehouses_sales))
+            (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
         ].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Current'})
 
         p_prev = df_sales[
             (df_sales['Date'].dt.to_period('M') == prev_month_period) & 
-            (df_sales['Warehouse'].isin(selected_warehouses_sales))
+            (df_sales['Warehouse Name'].isin(selected_warehouses_sales))
         ].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Previous'})
         
         # 3. 合并数据并重新排列列顺序
