@@ -333,20 +333,20 @@ st.sidebar.divider()
 with st.sidebar.expander("📄 Export PDF Report", expanded=False):
     st.write("Select sections:")
 
+    # 使用独立的 key 来避免与主页面的组件冲突
     exp_summary = st.checkbox("Executive Summary", value=True, key="pdf_exp_summary")
     exp_stock = st.checkbox("Stock Balance", value=True, key="pdf_exp_stock")
     exp_sales = st.checkbox("Sales Analysis", value=True, key="pdf_exp_sales")
     exp_dos = st.checkbox("Purchase (DOS)", value=True, key="pdf_exp_dos")
     
-    # 【关键修复】在 PDF 导出区域内添加仓库过滤器
     st.markdown("---")
     st.write("Filter data for the report:")
     all_warehouses_for_export = df_sales['Warehouse Name'].unique()
     selected_warehouses_for_export = st.multiselect(
         "Select Warehouses for PDF:",
         options=all_warehouses_for_export,
-        default=all_warehouses_for_export, # 默认全选
-        key='pdf_warehouse_filter' # 使用独立的 key 避免冲突
+        default=all_warehouses_for_export,
+        key='pdf_warehouse_filter' # 专属 key
     )
 
     if st.button("🚀 Prepare PDF Report", use_container_width=True):
@@ -354,24 +354,55 @@ with st.sidebar.expander("📄 Export PDF Report", expanded=False):
             st.warning("Please select at least one section.")
         else:
             with st.spinner("Generating full analytics report..."):
-                # --- 【核心修复】在这里应用所有过滤器来创建用于 PDF 的专属 DataFrame ---
-                pdf_mask = (
+                
+                # ==================================================================
+                # 【核心修复】: 在所有 'if exp_...' 检查之前，准备好所有需要的数据
+                # ==================================================================
+
+                # --- 1. 准备【销售数据】(df_for_pdf) ---
+                # 这是最基础的数据，后续计算会用到
+                pdf_sales_mask = (
                     (df_sales['Date'] >= pd.to_datetime(date_range[0])) & 
                     (df_sales['Date'] <= pd.to_datetime(date_range[1])) &
-                    (df_sales['Warehouse Name'].isin(selected_warehouses_for_export)) # 使用 PDF 专属的仓库选择器
+                    (df_sales['Warehouse Name'].isin(selected_warehouses_for_export))
                 )
-                df_pdf_data = df_sales[pdf_mask].copy() # 创建一个名为 df_pdf_data 的新 DataFrame
+                df_for_pdf = df_sales[pdf_sales_mask].copy()
 
-                # 检查筛选后是否有数据
-                if df_pdf_data.empty:
-                    st.sidebar.error("No data found for the selected filters. PDF not generated.")
+                # --- 2. 准备【库存数据】(df_stock_for_pdf 和 summary_df_pdf) ---
+                df_stock_for_pdf = df_stock[df_stock['Warehouse Name'].isin(selected_warehouses_for_export)].copy()
+                
+                df_stock_positive_pdf = df_stock_for_pdf[df_stock_for_pdf['Quantity'] > 0].copy()
+                summary_df_pdf = pd.DataFrame()
+                if not df_stock_positive_pdf.empty:
+                    summary_df_pdf = df_stock_positive_pdf.groupby('Warehouse Type')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=False)
+
+                # --- 3. 准备【DOS数据】(dos_df_pdf) ---
+                # 注意：DOS的销售部分使用不受日期范围影响的 df_sales_for_dos
+                recent_sales_dos_pdf = df_sales_for_dos[
+                    (df_sales_for_dos['Date'] > start_date_dos) & 
+                    (df_sales_for_dos['Date'] <= last_date_all) &
+                    (df_sales_for_dos['Warehouse Name'].isin(selected_warehouses_for_export))
+                ]
+                sku_sales_dos_pdf = recent_sales_dos_pdf.groupby('Stock Code')['Quantity'].sum().reset_index()
+                sku_sales_dos_pdf['ADS'] = sku_sales_dos_pdf['Quantity'] / 21
+                
+                sku_stock_dos_pdf = df_stock_for_pdf.groupby(['Stock Code', 'Stock Name'])['Quantity'].sum().reset_index()
+
+                dos_df_pdf = pd.merge(sku_stock_dos_pdf, sku_sales_dos_pdf[['Stock Code', 'ADS']], on='Stock Code', how='left').fillna(0)
+                dos_df_pdf['DOS (Days)'] = np.where(dos_df_pdf['ADS'] > 0, dos_df_pdf['Quantity'] / dos_df_pdf['ADS'], 9999)
+                dos_df_pdf['Status'] = dos_df_pdf.apply(get_dos_status, axis=1)
+
+                # --- 数据准备全部完成 ---
+
+                # 检查是否有数据，如果销售数据为空，可能没必要继续
+                if df_for_pdf.empty and df_stock_for_pdf.empty:
+                    st.sidebar.error("No data found for the selected filters. PDF cannot be generated.")
                     st.stop()
 
-                # 1. 基础设置
+                # 基础设置
                 date_str = f"{date_range[0]} to {date_range[1]}"
                 pdf = SKG_Report(date_str)
                 pdf.set_auto_page_break(auto=True, margin=15)
-                skg_blue = (0, 102, 204)
 
                 # --- PART 1: SALES ANALYSIS (KPIs + Trend + Channel) ---
                 if exp_sales:
