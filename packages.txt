@@ -1,6 +1,3 @@
-# packages.txt
-
-# Chromium and its dependencies for Plotly/Kaleido image export
 libnss3
 libnspr4
 libatk1.0-0
