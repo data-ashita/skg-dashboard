@@ -6,6 +6,7 @@ import numpy as np
 from supabase import create_client, Client
 from fpdf import FPDF
 import io
+import time
 
 # --- 1. 页面配置 ---
 st.set_page_config(
@@ -75,8 +76,13 @@ supabase = init_connection()
 
 # --- 3. 简易登录 ---
 def check_password():
+    # 只在第一次运行时初始化所有需要的 session_state 变量
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
+    if "generating_pdf" not in st.session_state:
+        st.session_state["generating_pdf"] = False
+    if "pdf_data" not in st.session_state:
+        st.session_state["pdf_data"] = None
 
     if st.session_state["password_correct"]:
         return True
@@ -87,13 +93,11 @@ def check_password():
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         
-        # 添加登录按钮
         if st.button("Login", type="primary"):
-            # 验证逻辑
             if (username == st.secrets["DB_USERNAME"] and 
                 password == st.secrets["DB_PASSWORD"]):
                 st.session_state["password_correct"] = True
-                st.rerun() # 验证成功后刷新页面以进入主程序
+                st.rerun()
             else:
                 st.error("😕 User not found or password incorrect")
                 st.session_state["password_correct"] = False
@@ -330,339 +334,384 @@ if enable_comparison:
     )
 
 st.sidebar.divider()
-with st.sidebar.expander("📄 Export PDF Report", expanded=False):
-    st.write("Select sections:")
+with st.sidebar.expander("📄 Export PDF Report", expanded=True):
+    st.write("Select sections to include:")
 
-    exp_summary = st.checkbox("Executive Summary", value=True)
-    exp_stock = st.checkbox("Stock Balance", value=True)
-    exp_sales = st.checkbox("Sales Analysis", value=True)
-    exp_dos = st.checkbox("Purchase (DOS)", value=True)
+    # 复选框让用户选择要包含的部分
+    exp_summary = st.checkbox("Executive Summary", value=True, key="exp_summary")
+    exp_stock = st.checkbox("Stock Balance", value=True, key="exp_stock")
+    exp_sales = st.checkbox("Sales Analysis", value=True, key="exp_sales")
+    exp_dos = st.checkbox("Purchase (DOS)", value=True, key="exp_dos")
     
+    # 1. 按下按钮，只设置状态，不执行耗时操作
     if st.button("🚀 Prepare PDF Report", use_container_width=True):
         if not (exp_summary or exp_stock or exp_sales or exp_dos):
             st.warning("Please select at least one section.")
         else:
-            with st.spinner("Generating full analytics report..."):
-                # 1. 基础设置
-                date_str = f"{date_range[0]} to {date_range[1]}"
-                pdf = SKG_Report(date_str)
-                pdf.set_auto_page_break(auto=True, margin=15)
-                skg_blue = (0, 102, 204)
+            # 设置状态为“正在生成”，并清空旧的PDF数据
+            st.session_state.generating_pdf = True
+            st.session_state.pdf_data = None
+            st.rerun() # 立即刷新页面，进入生成流程
 
-                # --- PART 1: SALES ANALYSIS (KPIs + Trend + Channel) ---
-                if exp_sales:
-                    pdf.add_page()
-                    navy_blue = (26, 54, 104)
-                    pdf.set_text_color(*navy_blue)
-                    pdf.set_font('helvetica', 'B', 20)
-                    pdf.cell(0, 15, "01. Sales Performance Analysis", 0, 1, 'L')
-                    
-                    pdf.set_draw_color(*navy_blue)
-                    pdf.set_line_width(0.8)
-                    pdf.line(11, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(10)
+    # 2. 如果PDF数据已生成，显示下载按钮
+    if st.session_state.pdf_data:
+        st.success("✅ Full Report Ready!")
+        st.download_button(
+            label="📥 Click to Download PDF",
+            data=bytes(st.session_state.pdf_data), 
+            file_name=f"SKG_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            on_click=lambda: setattr(st.session_state, 'generating_pdf', False)
+        )
 
-                    # --- 1. KPI 指标看板 ---
-                    pdf.set_fill_color(240, 244, 248)
-                    pdf.rect(10, pdf.get_y(), 190, 30, 'F') 
-                    kpi_y = pdf.get_y() + 7
-                    pdf.set_y(kpi_y)
-                    pdf.set_x(10)
-                    pdf.set_text_color(100, 100, 100)
-                    pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(63, 5, "TOTAL REVENUE", 0, 0, 'C')
-                    pdf.cell(63, 5, "UNITS SOLD", 0, 0, 'C')
-                    pdf.cell(63, 5, "AVG TICKET", 0, 1, 'C')
-                    pdf.set_x(10)
-                    pdf.set_text_color(0, 0, 0)
-                    pdf.set_font('helvetica', 'B', 14)
-                    pdf.cell(63, 10, f"RM {df_sales['Sales'].sum():,.2f}", 0, 0, 'C')
-                    pdf.cell(63, 10, f"{df_sales['Quantity'].sum():,.0f}", 0, 0, 'C')
-                    avg_t = df_sales['Sales'].mean() if not df_sales.empty else 0
-                    pdf.cell(63, 10, f"RM {avg_t:,.2f}", 0, 1, 'C')
-                    pdf.set_y(kpi_y + 23)
-                    pdf.ln(10)
+# 3. 如果状态为“正在生成”，则执行实际的PDF创建逻辑
+if st.session_state.generating_pdf and st.session_state.pdf_data is None:
+    # 在侧边栏创建一个用于显示进度的区域
+    progress_placeholder = st.sidebar.empty()
+    with progress_placeholder.container():
+        progress_bar = st.progress(0, text="Initializing report...")
+        
+        # --- 开始生成PDF ---
+        date_str = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
+        pdf = SKG_Report(date_str)
+        pdf.set_auto_page_break(auto=True, margin=15)
+        
+        if exp_summary:
+            pdf.add_cover_page()
 
-                    # --- 2. 销售趋势与渠道分析 (并列图表/上下排版) ---
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, "MONTHLY REVENUE TREND", 0, 1, 'L')
-                    
-                    df_trend_pdf = df_sales.groupby(df_sales['Date'].dt.to_period('M'))['Sales'].sum().reset_index()
-                    df_trend_pdf['Date'] = df_trend_pdf['Date'].astype(str)
-                    fig_s = px.line(df_trend_pdf, x='Date', y='Sales', markers=True, template="plotly_white")
-                    fig_s.update_traces(line_color='#1A3668', line_width=3)
-                    pdf.image(io.BytesIO(fig_s.to_image(format="png", width=1000, height=400)), x=10, w=190)
-                    
-                    pdf.ln(5)
-                    pdf.cell(0, 10, "CHANNEL REVENUE COMPARISON", 0, 1, 'L')
-                    chan_df = df_sales.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
-                    # 新增：渠道对比 Bar Chart
-                    fig_chan = px.bar(chan_df, x='AR Type', y='Sales', text_auto='.2s', template="plotly_white")
-                    fig_chan.update_traces(marker_color='#1A3668')
-                    pdf.image(io.BytesIO(fig_chan.to_image(format="png", width=1000, height=400)), x=10, w=190)
+        time.sleep(0.5) # 短暂视觉停留
+        progress_bar.progress(10, text="✅ Initialized. Processing Sales section...")
 
-                    # --- 3. 新页：Product Performance Analysis ---
-                    pdf.add_page()
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 16)
-                    pdf.cell(0, 15, "Product Performance Analysis", 0, 1, 'L')
-                    pdf.ln(5)
+        if exp_sales:
+            pdf.add_page()
+            navy_blue = (26, 54, 104)
+            pdf.set_text_color(*navy_blue)
+            pdf.set_font('helvetica', 'B', 20)
+            pdf.cell(0, 15, "01. Sales Performance Analysis", 0, 1, 'L')
+            
+            pdf.set_draw_color(*navy_blue)
+            pdf.set_line_width(0.8)
+            pdf.line(11, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(10)
 
-                    # A. Sales by Category Pie Chart
-                    pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, "SALES BY CATEGORY", 0, 1, 'L')
-                    cat_sales_pdf = df_sales.groupby('Category')['Sales'].sum().reset_index()
-                    fig_cat = px.pie(cat_sales_pdf, values='Sales', names='Category', template="plotly_white", hole=0.4)
-                    pdf.image(io.BytesIO(fig_cat.to_image(format="png", width=800, height=400)), x=35, w=140)
-                    
-                    pdf.ln(10)
-                    # B. Detailed Product Performance Table
-                    pdf.cell(0, 10, "TOP SELLING MODELS", 0, 1, 'L')
-                    
-                    # 表头
-                    pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 9)
-                    pdf.cell(90, 10, " MODEL NAME", 1, 0, 'L', True)
-                    pdf.cell(35, 10, "CATEGORY", 1, 0, 'C', True)
-                    pdf.cell(25, 10, "UNITS", 1, 0, 'C', True)
-                    pdf.cell(40, 10, "REVENUE ", 1, 1, 'R', True)
+            # --- 1. KPI 指标看板 ---
+            pdf.set_fill_color(240, 244, 248)
+            pdf.rect(10, pdf.get_y(), 190, 30, 'F') 
+            kpi_y = pdf.get_y() + 7
+            pdf.set_y(kpi_y)
+            pdf.set_x(10)
+            pdf.set_text_color(100, 100, 100)
+            pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(63, 5, "TOTAL REVENUE", 0, 0, 'C')
+            pdf.cell(63, 5, "UNITS SOLD", 0, 0, 'C')
+            pdf.cell(63, 5, "AVG TICKET", 0, 1, 'C')
+            pdf.set_x(10)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font('helvetica', 'B', 14)
+            pdf.cell(63, 10, f"RM {df_sales['Sales'].sum():,.2f}", 0, 0, 'C')
+            pdf.cell(63, 10, f"{df_sales['Quantity'].sum():,.0f}", 0, 0, 'C')
+            avg_t = df_sales['Sales'].mean() if not df_sales.empty else 0
+            pdf.cell(63, 10, f"RM {avg_t:,.2f}", 0, 1, 'C')
+            pdf.set_y(kpi_y + 23)
+            pdf.ln(10)
 
-                    # 表体 (斑马纹)
-                    pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
-                    prod_perf = df_sales.groupby(['Stock Name', 'Category']).agg({'Quantity':'sum', 'Sales':'sum'}).reset_index().sort_values('Quantity', ascending=False).head(15)
-                    
-                    for i, row in prod_perf.iterrows():
-                        fill = (i % 2 == 0)
-                        pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
-                        
-                        p_name = str(row['Stock Name'])[:45].encode('ascii', 'ignore').decode()
-                        pdf.cell(90, 8, f" {p_name}", 1, 0, 'L', fill)
-                        pdf.cell(35, 8, f"{row['Category']}", 1, 0, 'C', fill)
-                        pdf.cell(25, 8, f"{int(row['Quantity'])}", 1, 0, 'C', fill)
-                        pdf.cell(40, 8, f"RM {row['Sales']:,.2f} ", 1, 1, 'R', fill)
+            # --- 2. 销售趋势与渠道分析 (并列图表/上下排版) ---
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, "MONTHLY REVENUE TREND", 0, 1, 'L')
+            
+            df_trend_pdf = df_sales.groupby(df_sales['Date'].dt.to_period('M'))['Sales'].sum().reset_index()
+            df_trend_pdf['Date'] = df_trend_pdf['Date'].astype(str)
+            fig_s = px.line(df_trend_pdf, x='Date', y='Sales', markers=True, template="plotly_white")
+            fig_s.update_traces(line_color='#1A3668', line_width=3)
+            pdf.image(io.BytesIO(fig_s.to_image(format="png", width=1000, height=400)), x=10, w=190)
+            
+            pdf.ln(5)
+            pdf.cell(0, 10, "CHANNEL REVENUE COMPARISON", 0, 1, 'L')
+            chan_df = df_sales.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
+            # 新增：渠道对比 Bar Chart
+            fig_chan = px.bar(chan_df, x='AR Type', y='Sales', text_auto='.2s', template="plotly_white")
+            fig_chan.update_traces(marker_color='#1A3668')
+            pdf.image(io.BytesIO(fig_chan.to_image(format="png", width=1000, height=400)), x=10, w=190)
 
-                    # --- 4. 新页：Product Trend Analysis ---
-                    pdf.add_page()
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 16)
-                    pdf.cell(0, 15, "Product Trend Analysis", 0, 1, 'L')
-                    pdf.ln(5)
+            # --- 3. 新页：Product Performance Analysis ---
+            pdf.add_page()
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 16)
+            pdf.cell(0, 15, "Product Performance Analysis", 0, 1, 'L')
+            pdf.ln(5)
 
-                    # A. 准备对比数据 (本月 vs 上月)
-                    curr_month_period = pd.to_datetime(date_range[1]).to_period('M')
-                    prev_month_period = curr_month_period - 1
-                    
-                    p_curr = df_sales[df_sales['Date'].dt.to_period('M') == curr_month_period].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Current'})
-                    p_prev = df_sales[df_sales['Date'].dt.to_period('M') == prev_month_period].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Previous'})
-                    
-                    perf_df = pd.merge(p_curr, p_prev, on='Stock Name', how='outer').fillna(0)
-                    perf_df['Growth'] = perf_df['Current'] - perf_df['Previous']
-                    
-                    # 趋势对比柱状图 (Chart)
-                    pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, f"MODELS PERFORMANCE TREND: {prev_month_period} vs {curr_month_period}", 0, 1, 'L')
-                    top_perf_plot = perf_df.sort_values('Current', ascending=False).head(10)
-                    plot_data = top_perf_plot.melt(id_vars='Stock Name', value_vars=['Previous', 'Current'], var_name='Period', value_name='Qty')
-                    fig_perf = px.bar(plot_data, x='Qty', y='Stock Name', color='Period', barmode='group', orientation='h', 
-                                      template="plotly_white", color_discrete_map={'Previous':'#A0AEC0', 'Current':'#1A3668'})
-                    pdf.image(io.BytesIO(fig_perf.to_image(format="png", width=1000, height=500)), x=10, w=190)
-                    
-                    pdf.ln(10)
+            # A. Sales by Category Pie Chart
+            pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, "SALES BY CATEGORY", 0, 1, 'L')
+            cat_sales_pdf = df_sales.groupby('Category')['Sales'].sum().reset_index()
+            fig_cat = px.pie(cat_sales_pdf, values='Sales', names='Category', template="plotly_white", hole=0.4)
+            pdf.image(io.BytesIO(fig_cat.to_image(format="png", width=800, height=400)), x=35, w=140)
+            
+            pdf.ln(10)
+            # B. Detailed Product Performance Table
+            pdf.cell(0, 10, "TOP SELLING MODELS", 0, 1, 'L')
+            
+            # 表头
+            pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 9)
+            pdf.cell(90, 10, " MODEL NAME", 1, 0, 'L', True)
+            pdf.cell(35, 10, "CATEGORY", 1, 0, 'C', True)
+            pdf.cell(25, 10, "UNITS", 1, 0, 'C', True)
+            pdf.cell(40, 10, "REVENUE ", 1, 1, 'R', True)
 
-                    # B. 产品性能汇总表 (Detailed Zebra Table)
-                    pdf.cell(0, 10, "PRODUCT PERFORMANCE SUMMARY", 0, 1, 'L')
-                    
-                    # 表头
-                    pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 9)
-                    pdf.cell(100, 10, " MODEL NAME", 1, 0, 'L', True)
-                    pdf.cell(25, 10, "PREV QTY", 1, 0, 'C', True)
-                    pdf.cell(25, 10, "CURR QTY", 1, 0, 'C', True)
-                    pdf.cell(30, 10, "GROWTH ", 1, 1, 'R', True)
+            # 表体 (斑马纹)
+            pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
+            prod_perf = df_sales.groupby(['Stock Name', 'Category']).agg({'Quantity':'sum', 'Sales':'sum'}).reset_index().sort_values('Quantity', ascending=False).head(15)
+            
+            for i, row in prod_perf.iterrows():
+                fill = (i % 2 == 0)
+                pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                
+                p_name = str(row['Stock Name'])[:45].encode('ascii', 'ignore').decode()
+                pdf.cell(90, 8, f" {p_name}", 1, 0, 'L', fill)
+                pdf.cell(35, 8, f"{row['Category']}", 1, 0, 'C', fill)
+                pdf.cell(25, 8, f"{int(row['Quantity'])}", 1, 0, 'C', fill)
+                pdf.cell(40, 8, f"RM {row['Sales']:,.2f} ", 1, 1, 'R', fill)
 
-                    # 表体
-                    pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
-                    display_perf = perf_df.sort_values('Current', ascending=False).head(20)
-                    
-                    for i, row in display_perf.iterrows():
-                        fill = (i % 2 == 0)
-                        pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
-                        
-                        p_name = str(row['Stock Name'])[:50].encode('ascii', 'ignore').decode()
-                        pdf.cell(100, 8, f" {p_name}", 1, 0, 'L', fill)
-                        pdf.cell(25, 8, f"{int(row['Previous'])}", 1, 0, 'C', fill)
-                        pdf.cell(25, 8, f"{int(row['Current'])}", 1, 0, 'C', fill)
-                        
-                        # 增长逻辑颜色
-                        growth_val = int(row['Growth'])
-                        if growth_val > 0:
-                            pdf.set_text_color(0, 128, 0) # 绿色
-                            growth_str = f"+{growth_val} "
-                        elif growth_val < 0:
-                            pdf.set_text_color(200, 0, 0) # 红色
-                            growth_str = f"{growth_val} "
-                        else:
-                            pdf.set_text_color(40, 40, 40)
-                            growth_str = "0 "
-                            
-                        pdf.cell(30, 8, growth_str, 1, 1, 'R', fill)
-                        pdf.set_text_color(40, 40, 40) # 还原颜色
+            # --- 4. 新页：Product Trend Analysis ---
+            pdf.add_page()
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 16)
+            pdf.cell(0, 15, "Product Trend Analysis", 0, 1, 'L')
+            pdf.ln(5)
 
-                # --- PART 2: STOCK BALANCE (Distribution + Top 20 + Location) ---
-                if exp_stock:
-                    pdf.add_page()
-                    navy_blue = (26, 54, 104)
-                    pdf.set_text_color(*navy_blue)
-                    pdf.set_font('helvetica', 'B', 20)
-                    pdf.cell(0, 15, "02. Inventory & Distribution", 0, 1, 'L')
-                    
-                    pdf.set_draw_color(*navy_blue)
-                    pdf.set_line_width(0.8)
-                    pdf.line(11, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(10)
+            # A. 准备对比数据 (本月 vs 上月)
+            curr_month_period = pd.to_datetime(date_range[1]).to_period('M')
+            prev_month_period = curr_month_period - 1
+            
+            p_curr = df_sales[df_sales['Date'].dt.to_period('M') == curr_month_period].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Current'})
+            p_prev = df_sales[df_sales['Date'].dt.to_period('M') == prev_month_period].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Previous'})
+            
+            perf_df = pd.merge(p_curr, p_prev, on='Stock Name', how='outer').fillna(0)
+            perf_df['Growth'] = perf_df['Current'] - perf_df['Previous']
+            
+            # 趋势对比柱状图 (Chart)
+            pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, f"MODELS PERFORMANCE TREND: {prev_month_period} vs {curr_month_period}", 0, 1, 'L')
+            top_perf_plot = perf_df.sort_values('Current', ascending=False).head(10)
+            plot_data = top_perf_plot.melt(id_vars='Stock Name', value_vars=['Previous', 'Current'], var_name='Period', value_name='Qty')
+            fig_perf = px.bar(plot_data, x='Qty', y='Stock Name', color='Period', barmode='group', orientation='h', 
+                            template="plotly_white", color_discrete_map={'Previous':'#A0AEC0', 'Current':'#1A3668'})
+            pdf.image(io.BytesIO(fig_perf.to_image(format="png", width=1000, height=500)), x=10, w=190)
+            
+            pdf.ln(10)
 
-                    # A. Stock KPI Card (库存总量看板)
-                    pdf.set_fill_color(240, 244, 248)
-                    pdf.rect(10, pdf.get_y(), 190, 20, 'F')
-                    
-                    pdf.set_y(pdf.get_y() + 5)
-                    pdf.set_text_color(100, 100, 100); pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(95, 5, "TOTAL STOCK QUANTITY", 0, 0, 'C')
-                    pdf.cell(95, 5, "ACTIVE LOCATIONS", 0, 1, 'C')
-                    
-                    pdf.set_text_color(0, 0, 0); pdf.set_font('helvetica', 'B', 14)
-                    total_qty_st = summary_df['Quantity'].sum() if not summary_df.empty else 0
-                    active_locs = df_stock[df_stock['Quantity']>0]['Warehouse Name'].nunique()
-                    pdf.cell(95, 8, f"{int(total_qty_st):,}", 0, 0, 'C')
-                    pdf.cell(95, 8, f"{active_locs}", 0, 1, 'C')
-                    pdf.ln(10)
-                    
-                    # B. Distribution Pie Chart
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, "STOCK DISTRIBUTION BY TYPE", 0, 1, 'L')
-                    
-                    if not summary_df.empty:
-                        fig_st = px.pie(summary_df, values='Quantity', names='Warehouse Type', template="plotly_white")
-                        fig_st.update_layout(margin=dict(l=20, r=20, t=20, b=20))
-                        pdf.image(io.BytesIO(fig_st.to_image(format="png", width=800, height=400)), x=55, w=100)
-                    
-                    # --- 【新增】库存汇总表格 (Type, Qty, % Share) ---
-                    pdf.ln(5)
-                    pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, "INVENTORY SUMMARY BY TYPE", 0, 1, 'L')
-                    
-                    # 表头 (深蓝背景，白色文字)
-                    pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255)
-                    pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(80, 10, " WAREHOUSE TYPE", 1, 0, 'L', True)
-                    pdf.cell(40, 10, "QUANTITY ", 1, 0, 'R', True)
-                    pdf.cell(40, 10, "SHARE (%) ", 1, 1, 'R', True)
-                    
-                    # 表体 (斑马纹底色)
-                    pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 10)
-                    total_q = summary_df['Quantity'].sum()
-                    for i, row in summary_df.iterrows():
-                        fill = (i % 2 == 0)
-                        pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
-                        
-                        share_val = (row['Quantity'] / total_q * 100) if total_q > 0 else 0
-                        pdf.cell(80, 8, f" {row['Warehouse Type']}", 1, 0, 'L', fill)
-                        pdf.cell(40, 8, f"{int(row['Quantity']):,} ", 1, 0, 'R', fill)
-                        pdf.cell(40, 8, f"{share_val:.1f}% ", 1, 1, 'R', fill)
+            # B. 产品性能汇总表 (Detailed Zebra Table)
+            pdf.cell(0, 10, "PRODUCT PERFORMANCE SUMMARY", 0, 1, 'L')
+            
+            # 表头
+            pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 9)
+            pdf.cell(100, 10, " MODEL NAME", 1, 0, 'L', True)
+            pdf.cell(25, 10, "PREV QTY", 1, 0, 'C', True)
+            pdf.cell(25, 10, "CURR QTY", 1, 0, 'C', True)
+            pdf.cell(30, 10, "GROWTH ", 1, 1, 'R', True)
 
-                    # C. Top 20 SKUs Bar Chart (另起一页)
-                    pdf.add_page()
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 14)
-                    pdf.cell(0, 10, "TOP 20 SKUS BY QUANTITY", 0, 1, 'L')
+            # 表体
+            pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
+            display_perf = perf_df.sort_values('Current', ascending=False).head(20)
+            
+            for i, row in display_perf.iterrows():
+                fill = (i % 2 == 0)
+                pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                
+                p_name = str(row['Stock Name'])[:50].encode('ascii', 'ignore').decode()
+                pdf.cell(100, 8, f" {p_name}", 1, 0, 'L', fill)
+                pdf.cell(25, 8, f"{int(row['Previous'])}", 1, 0, 'C', fill)
+                pdf.cell(25, 8, f"{int(row['Current'])}", 1, 0, 'C', fill)
+                
+                # 增长逻辑颜色
+                growth_val = int(row['Growth'])
+                if growth_val > 0:
+                    pdf.set_text_color(0, 128, 0) # 绿色
+                    growth_str = f"+{growth_val} "
+                elif growth_val < 0:
+                    pdf.set_text_color(200, 0, 0) # 红色
+                    growth_str = f"{growth_val} "
+                else:
+                    pdf.set_text_color(40, 40, 40)
+                    growth_str = "0 "
                     
-                    top_20_st = df_stock[df_stock['Quantity']>0].groupby('Stock Name')['Quantity'].sum().nlargest(20).reset_index().sort_values('Quantity', ascending=True)
-                    fig_top20 = px.bar(top_20_st, x='Quantity', y='Stock Name', orientation='h', template="plotly_white")
-                    fig_top20.update_traces(marker_color='#1A3668')
-                    pdf.image(io.BytesIO(fig_top20.to_image(format="png", width=1000, height=600)), x=10, w=190)
+                pdf.cell(30, 8, growth_str, 1, 1, 'R', fill)
+                pdf.set_text_color(40, 40, 40) # 还原颜色
+                pass # 假设代码已执行
+        progress_bar.progress(40, text="✅ Sales done. Processing Inventory section...")
+        time.sleep(0.5)
 
-                    # D. Location Details Summary Table
-                    pdf.ln(10); pdf.set_font('helvetica', 'B', 12); pdf.cell(0, 10, "LOCATION DETAILS (TOP 15)", 0, 1, 'L')
-                    
-                    pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(120, 10, " WAREHOUSE NAME", 1, 0, 'L', True)
-                    pdf.cell(40, 10, "QTY BALANCE ", 1, 1, 'R', True)
+        # --- PART 2: STOCK BALANCE (Distribution + Top 20 + Location) ---
+        if exp_stock:
+            pdf.add_page()
+            navy_blue = (26, 54, 104)
+            pdf.set_text_color(*navy_blue)
+            pdf.set_font('helvetica', 'B', 20)
+            pdf.cell(0, 15, "02. Inventory & Distribution", 0, 1, 'L')
+            
+            pdf.set_draw_color(*navy_blue)
+            pdf.set_line_width(0.8)
+            pdf.line(11, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(10)
 
-                    pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 9)
-                    loc_df = df_stock[df_stock['Quantity']>0].groupby('Warehouse Name')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=False).head(15)
-                    for i, row in loc_df.iterrows():
-                        fill = (i % 2 == 0)
-                        pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
-                        name = str(row['Warehouse Name'])[:50].encode('ascii', 'ignore').decode()
-                        pdf.cell(120, 8, f" {name}", 1, 0, 'L', fill)
-                        pdf.cell(40, 8, f"{int(row['Quantity']):,} ", 1, 1, 'R', fill)
+            # A. Stock KPI Card (库存总量看板)
+            pdf.set_fill_color(240, 244, 248)
+            pdf.rect(10, pdf.get_y(), 190, 20, 'F')
+            
+            pdf.set_y(pdf.get_y() + 5)
+            pdf.set_text_color(100, 100, 100); pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(95, 5, "TOTAL STOCK QUANTITY", 0, 0, 'C')
+            pdf.cell(95, 5, "ACTIVE LOCATIONS", 0, 1, 'C')
+            
+            pdf.set_text_color(0, 0, 0); pdf.set_font('helvetica', 'B', 14)
+            total_qty_st = summary_df['Quantity'].sum() if not summary_df.empty else 0
+            active_locs = df_stock[df_stock['Quantity']>0]['Warehouse Name'].nunique()
+            pdf.cell(95, 8, f"{int(total_qty_st):,}", 0, 0, 'C')
+            pdf.cell(95, 8, f"{active_locs}", 0, 1, 'C')
+            pdf.ln(10)
+            
+            # B. Distribution Pie Chart
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, "STOCK DISTRIBUTION BY TYPE", 0, 1, 'L')
+            
+            if not summary_df.empty:
+                fig_st = px.pie(summary_df, values='Quantity', names='Warehouse Type', template="plotly_white")
+                fig_st.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+                pdf.image(io.BytesIO(fig_st.to_image(format="png", width=800, height=400)), x=55, w=100)
+            
+            # --- 【新增】库存汇总表格 (Type, Qty, % Share) ---
+            pdf.ln(5)
+            pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, "INVENTORY SUMMARY BY TYPE", 0, 1, 'L')
+            
+            # 表头 (深蓝背景，白色文字)
+            pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255)
+            pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(80, 10, " WAREHOUSE TYPE", 1, 0, 'L', True)
+            pdf.cell(40, 10, "QUANTITY ", 1, 0, 'R', True)
+            pdf.cell(40, 10, "SHARE (%) ", 1, 1, 'R', True)
+            
+            # 表体 (斑马纹底色)
+            pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 10)
+            total_q = summary_df['Quantity'].sum()
+            for i, row in summary_df.iterrows():
+                fill = (i % 2 == 0)
+                pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                
+                share_val = (row['Quantity'] / total_q * 100) if total_q > 0 else 0
+                pdf.cell(80, 8, f" {row['Warehouse Type']}", 1, 0, 'L', fill)
+                pdf.cell(40, 8, f"{int(row['Quantity']):,} ", 1, 0, 'R', fill)
+                pdf.cell(40, 8, f"{share_val:.1f}% ", 1, 1, 'R', fill)
 
-                # --- PART 3: PURCHASE (DOS Analysis) ---
-                if exp_dos:
-                    pdf.add_page()
-                    navy_blue = (26, 54, 104)
-                    pdf.set_text_color(*navy_blue)
-                    pdf.set_font('helvetica', 'B', 20)
-                    pdf.cell(0, 15, "03. Purchase & DOS Analysis", ln=True)
-                    
-                    pdf.set_draw_color(*navy_blue)
-                    pdf.set_line_width(0.8)
-                    pdf.line(11, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(10)
-                    
-                    # A. DOS Health KPI Cards
-                    status_counts_pdf = dos_df['Status'].value_counts()
-                    pdf.set_fill_color(240, 244, 248)
-                    pdf.rect(10, pdf.get_y(), 190, 20, 'F')
-                    
-                    pdf.set_y(pdf.get_y() + 5)
-                    pdf.set_text_color(100, 100, 100); pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(95, 5, "HEALTHY SKUS (14-60D)", 0, 0, 'C')
-                    pdf.cell(95, 5, "LOW STOCK ALERTS", 0, 1, 'C')
-                    
-                    pdf.set_text_color(0, 0, 0); pdf.set_font('helvetica', 'B', 14)
-                    healthy_cnt = status_counts_pdf.get('🟢 Healthy (14-60 Days)', 0)
-                    low_cnt = status_counts_pdf.get('🔴 Low Stock (<14 Days)', 0)
-                    pdf.cell(95, 8, f"{healthy_cnt}", 0, 0, 'C')
-                    pdf.set_text_color(200, 0, 0) # 警示项用红色
-                    pdf.cell(95, 8, f"{low_cnt}", 0, 1, 'C')
-                    pdf.ln(10)
-                    
-                    # B. Detailed DOS Table
-                    pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
-                    pdf.cell(0, 10, "INVENTORY HEALTH DETAIL (TOP 25)", 0, 1, 'L')
-                    
-                    # 表头
-                    pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(90, 10, " MODEL NAME", 1, 0, 'L', True)
-                    pdf.cell(50, 10, "STATUS", 1, 0, 'C', True)
-                    pdf.cell(30, 10, "DOS DAYS ", 1, 1, 'R', True)
-                    
-                    # 表体
-                    pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
-                    for i, row in dos_df.sort_values('DOS (Days)').head(25).iterrows():
-                        fill = (i % 2 == 0)
-                        pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
-                        
-                        name = str(row['Stock Name'])[:45].encode('ascii', 'ignore').decode()
-                        status_txt = str(row['Status']).encode('ascii', 'ignore').decode()
-                        
-                        pdf.cell(90, 8, f" {name}", 1, 0, 'L', fill)
-                        # 状态列根据健康度加粗显示
-                        if "Low Stock" in status_txt:
-                            pdf.set_text_color(200, 0, 0)
-                        elif "Healthy" in status_txt:
-                            pdf.set_text_color(0, 128, 0)
-                        
-                        pdf.cell(50, 8, f"{status_txt}", 1, 0, 'C', fill)
-                        pdf.set_text_color(40, 40, 40) # 还原颜色
-                        pdf.cell(30, 8, f"{row['DOS (Days)']:,.1f} ", 1, 1, 'R', fill)
+            # C. Top 20 SKUs Bar Chart (另起一页)
+            pdf.add_page()
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 14)
+            pdf.cell(0, 10, "TOP 20 SKUS BY QUANTITY", 0, 1, 'L')
+            
+            top_20_st = df_stock[df_stock['Quantity']>0].groupby('Stock Name')['Quantity'].sum().nlargest(20).reset_index().sort_values('Quantity', ascending=True)
+            fig_top20 = px.bar(top_20_st, x='Quantity', y='Stock Name', orientation='h', template="plotly_white")
+            fig_top20.update_traces(marker_color='#1A3668')
+            pdf.image(io.BytesIO(fig_top20.to_image(format="png", width=1000, height=600)), x=10, w=190)
 
-                # 输出与下载
-                pdf_output = pdf.output()
-                st.sidebar.success("✅ Full Report Ready!")
-                st.sidebar.download_button(
-                    label="📥 Click to Download PDF",
-                    data=bytes(pdf_output),
-                    file_name=f"SKG_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+            # D. Location Details Summary Table
+            pdf.ln(10); pdf.set_font('helvetica', 'B', 12); pdf.cell(0, 10, "LOCATION DETAILS (TOP 15)", 0, 1, 'L')
+            
+            pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(120, 10, " WAREHOUSE NAME", 1, 0, 'L', True)
+            pdf.cell(40, 10, "QTY BALANCE ", 1, 1, 'R', True)
+
+            pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 9)
+            loc_df = df_stock[df_stock['Quantity']>0].groupby('Warehouse Name')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=False).head(15)
+            for i, row in loc_df.iterrows():
+                fill = (i % 2 == 0)
+                pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                name = str(row['Warehouse Name'])[:50].encode('ascii', 'ignore').decode()
+                pdf.cell(120, 8, f" {name}", 1, 0, 'L', fill)
+                pdf.cell(40, 8, f"{int(row['Quantity']):,} ", 1, 1, 'R', fill)
+            pass
+        progress_bar.progress(70, text="✅ Inventory done. Processing DOS section...")
+        time.sleep(0.5)
+
+        # --- PART 3: PURCHASE (DOS Analysis) ---
+        if exp_dos:
+            pdf.add_page()
+            navy_blue = (26, 54, 104)
+            pdf.set_text_color(*navy_blue)
+            pdf.set_font('helvetica', 'B', 20)
+            pdf.cell(0, 15, "03. Purchase & DOS Analysis", ln=True)
+            
+            pdf.set_draw_color(*navy_blue)
+            pdf.set_line_width(0.8)
+            pdf.line(11, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(10)
+            
+            # A. DOS Health KPI Cards
+            status_counts_pdf = dos_df['Status'].value_counts()
+            pdf.set_fill_color(240, 244, 248)
+            pdf.rect(10, pdf.get_y(), 190, 20, 'F')
+            
+            pdf.set_y(pdf.get_y() + 5)
+            pdf.set_text_color(100, 100, 100); pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(95, 5, "HEALTHY SKUS (14-60D)", 0, 0, 'C')
+            pdf.cell(95, 5, "LOW STOCK ALERTS", 0, 1, 'C')
+            
+            pdf.set_text_color(0, 0, 0); pdf.set_font('helvetica', 'B', 14)
+            healthy_cnt = status_counts_pdf.get('🟢 Healthy (14-60 Days)', 0)
+            low_cnt = status_counts_pdf.get('🔴 Low Stock (<14 Days)', 0)
+            pdf.cell(95, 8, f"{healthy_cnt}", 0, 0, 'C')
+            pdf.set_text_color(200, 0, 0) # 警示项用红色
+            pdf.cell(95, 8, f"{low_cnt}", 0, 1, 'C')
+            pdf.ln(10)
+            
+            # B. Detailed DOS Table
+            pdf.set_text_color(*navy_blue); pdf.set_font('helvetica', 'B', 12)
+            pdf.cell(0, 10, "INVENTORY HEALTH DETAIL (TOP 25)", 0, 1, 'L')
+            
+            # 表头
+            pdf.set_fill_color(*navy_blue); pdf.set_text_color(255, 255, 255); pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(90, 10, " MODEL NAME", 1, 0, 'L', True)
+            pdf.cell(50, 10, "STATUS", 1, 0, 'C', True)
+            pdf.cell(30, 10, "DOS DAYS ", 1, 1, 'R', True)
+            
+            # 表体
+            pdf.set_text_color(40, 40, 40); pdf.set_font('helvetica', '', 8)
+            for i, row in dos_df.sort_values('DOS (Days)').head(25).iterrows():
+                fill = (i % 2 == 0)
+                pdf.set_fill_color(245, 247, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                
+                name = str(row['Stock Name'])[:45].encode('ascii', 'ignore').decode()
+                status_txt = str(row['Status']).encode('ascii', 'ignore').decode()
+                
+                pdf.cell(90, 8, f" {name}", 1, 0, 'L', fill)
+                # 状态列根据健康度加粗显示
+                if "Low Stock" in status_txt:
+                    pdf.set_text_color(200, 0, 0)
+                elif "Healthy" in status_txt:
+                    pdf.set_text_color(0, 128, 0)
+                
+                pdf.cell(50, 8, f"{status_txt}", 1, 0, 'C', fill)
+                pdf.set_text_color(40, 40, 40) # 还原颜色
+                pdf.cell(30, 8, f"{row['DOS (Days)']:,.1f} ", 1, 1, 'R', fill)
+            pass
+        progress_bar.progress(90, text="✅ DOS done. Finalizing report...")
+        time.sleep(0.5)
+
+        st.session_state.pdf_data = bytes(pdf.output())
+        
+        # 清空进度条占位符
+        progress_placeholder.empty()
+        # 再次刷新页面，此时会显示下载按钮
+        st.rerun()
+
+        # 输出与下载
+        pdf_output = pdf.output()
+        st.sidebar.success("✅ Full Report Ready!")
+        st.sidebar.download_button(
+            label="📥 Click to Download PDF",
+            data=bytes(pdf_output),
+            file_name=f"SKG_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
 
 # --- 6. 主面板 ---
 st.title("SKG Business Analytics")
@@ -919,77 +968,65 @@ with tab2:
         # PART 3: Warehouse Comparison (Section 2)
         # =========================================================
         st.subheader("2. Warehouse Comparison Breakdown")
-        
+
+        # 1. 数据准备
         wh_comp_df = trend_df.groupby(['Sort_Key', 'DP', 'Warehouse Name'])['Sales'].sum().reset_index().sort_values('Sort_Key')
         period_order = trend_data['DP'].unique()
 
-        # 定义一个符合图片风格的配色方案 (也可根据需要调整)
+        # 定义专业色系
         custom_colors = ['#1A3668', '#2CA02C', '#D62728', '#E377C2', '#17BECF', '#BCBD22', '#7F7F7F']
 
-        # 图表选择器：增加了 "Professional Line (Optimized)" 选项
-        chart_type = st.selectbox(
-            "Select Visualization Style:", 
-            ["Professional Line (Optimized)", "Heatmap (Best for Overview)", "Small Charts (Best for Individual Trend)"], 
-            index=0, 
-            key='wh_view_select'
+        # 2. 创建 Professional Line 图表
+        fig_wh = px.line(
+            wh_comp_df, 
+            x='DP', 
+            y='Sales', 
+            color='Warehouse Name', 
+            category_orders={"DP": period_order},
+            color_discrete_sequence=custom_colors,
+            template="plotly_white"
         )
 
-        if chart_type == "Professional Line (Optimized)":
-            fig_wh = px.line(
-                wh_comp_df, 
-                x='DP', 
-                y='Sales', 
-                color='Warehouse Name', 
-                category_orders={"DP": period_order},
-                color_discrete_sequence=custom_colors,
-                template="plotly_white"
-            )
-            
-            # 优化线条和悬停效果
-            fig_wh.update_traces(
-                line_width=2.5, 
-                mode='lines', # 【关键修复】：使用 mode='lines' 替代 markers=False
-                hovertemplate="Warehouse: %{fullData.name}<br>Revenue: RM%{y:,.2f}<extra></extra>"
-            )
+        # 3. 优化线条线条效果与交互
+        fig_wh.update_traces(
+            line_width=3,          # 稍微加粗线条，更具视觉冲击力
+            mode='lines+markers',  # 建议加上 markers，在数据点较少时更容易辨认
+            marker=dict(size=6),
+            connectgaps=True,      # 如果数据有缺失，自动连接
+            hovertemplate="<b>Warehouse:</b> %{fullData.name}<br><b>Revenue:</b> RM %{y:,.2f}<extra></extra>"
+        )
 
-            # 优化布局配置
-            fig_wh.update_layout(
-                hovermode='x unified', 
-                height=500,
-                xaxis=dict(
-                    title="",
-                    showgrid=False,
-                    linecolor='#d6d6d6'
-                ),
-                yaxis=dict(
-                    title="Revenue (RM)",
-                    showgrid=True,
-                    gridcolor='#f0f0f0', 
-                    tickformat=".2s",    
-                    linecolor='#d6d6d6'
-                ),
-                legend=dict(
-                    orientation="h",     
-                    yanchor="bottom",
-                    y=-0.25,             
-                    xanchor="center",
-                    x=0.5,
-                    title=""
-                ),
-                margin=dict(t=20, b=100, l=40, r=40)
-            )
-            st.plotly_chart(fig_wh, use_container_width=True)
+        # 4. 精细化布局配置
+        fig_wh.update_layout(
+            hovermode='x unified', # 鼠标移动时同时显示所有仓库的数据，方便对比
+            height=500,
+            xaxis=dict(
+                title="",
+                showgrid=False,
+                linecolor='#d6d6d6',
+                tickangle=0        # 确保日期标签水平显示
+            ),
+            yaxis=dict(
+                title="Revenue (RM)",
+                showgrid=True,
+                gridcolor='#f0f0f0', 
+                tickformat=",",    # 使用标准千分位格式
+                linecolor='#d6d6d6',
+                rangemode="tozero" # 强制 Y 轴从 0 开始
+            ),
+            legend=dict(
+                orientation="h",   # 横向排列图例
+                yanchor="bottom",
+                y=-0.2,            # 调整图例位置，避免遮挡
+                xanchor="center",
+                x=0.5,
+                title=""
+            ),
+            margin=dict(t=30, b=80, l=40, r=40)
+        )
 
-        elif chart_type == "Heatmap (Best for Overview)":
-            fig_wh = px.density_heatmap(wh_comp_df, x='DP', y='Warehouse Name', z='Sales', histfunc="sum", color_continuous_scale="Viridis", text_auto=True)
-            fig_wh.update_layout(xaxis=dict(type='category', categoryorder='array', categoryarray=period_order), height=500)
-            st.plotly_chart(fig_wh, use_container_width=True)
-            
-        else: # Small Charts (Best for Individual Trend)
-            fig_wh = px.line(wh_comp_df, x='DP', y='Sales', color='Warehouse Name', facet_col='Warehouse Name', facet_col_wrap=3, markers=True)
-            fig_wh.update_yaxes(matches=None)
-            fig_wh.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-            st.plotly_chart(fig_wh, use_container_width=True)
+        # 5. 显示图表
+        st.plotly_chart(fig_wh, use_container_width=True)
 
         st.divider()
 
@@ -1055,8 +1092,10 @@ with tab2:
                     }
                 )
 
+        st.container(height=10, border=False)
+
         st.subheader("3.1 Detailed Customer & Product Breakdown")
-        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+        st.caption("💡Note: Displaying data for the [Primary Date Range] only.")
 
         dd_col1, dd_col2, dd_col3 = st.columns(3)
 
@@ -1189,12 +1228,10 @@ with tab2:
                     }
                 )
 
-        # =========================================================
-        # PART 5.1: Product-to-Customer Drill-down (仅跟随主日期)
-        # =========================================================
-        st.markdown("---")
-        st.subheader("🔍 Product Sales Traceability")
-        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+        st.container(height=30, border=False)
+
+        st.subheader("4.1 Product Sales Traceability")
+        st.caption("💡Note: Displaying data for the [Primary Date Range] only.")
 
         p_col1, p_col2, p_col3 = st.columns(3)
 
