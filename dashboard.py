@@ -994,87 +994,9 @@ with tab2:
         st.divider()
 
         # =========================================================
-        # PART 3: Warehouse Comparison (Section 2)
+        # PART 2: Channel & Customer Analysis (Section 3 - 支持多月份对比)
         # =========================================================
-        st.subheader("2. Warehouse Comparison Breakdown")
-        
-        wh_comp_df = trend_df.groupby(['Sort_Key', 'DP', 'Warehouse Name'])['Sales'].sum().reset_index().sort_values('Sort_Key')
-        period_order = trend_data['DP'].unique()
-
-        # 定义一个符合图片风格的配色方案 (也可根据需要调整)
-        custom_colors = ['#1A3668', '#2CA02C', '#D62728', '#E377C2', '#17BECF', '#BCBD22', '#7F7F7F']
-
-        # 图表选择器：增加了 "Professional Line (Optimized)" 选项
-        chart_type = st.selectbox(
-            "Select Visualization Style:", 
-            ["Professional Line (Optimized)", "Heatmap (Best for Overview)", "Small Charts (Best for Individual Trend)"], 
-            index=0, 
-            key='wh_view_select'
-        )
-
-        if chart_type == "Professional Line (Optimized)":
-            fig_wh = px.line(
-                wh_comp_df, 
-                x='DP', 
-                y='Sales', 
-                color='Warehouse Name', 
-                category_orders={"DP": period_order},
-                color_discrete_sequence=custom_colors,
-                template="plotly_white"
-            )
-            
-            # 优化线条和悬停效果
-            fig_wh.update_traces(
-                line_width=2.5, 
-                mode='lines', # 【关键修复】：使用 mode='lines' 替代 markers=False
-                hovertemplate="Warehouse: %{fullData.name}<br>Revenue: RM%{y:,.2f}<extra></extra>"
-            )
-
-            # 优化布局配置
-            fig_wh.update_layout(
-                hovermode='x unified', 
-                height=500,
-                xaxis=dict(
-                    title="",
-                    showgrid=False,
-                    linecolor='#d6d6d6'
-                ),
-                yaxis=dict(
-                    title="Revenue (RM)",
-                    showgrid=True,
-                    gridcolor='#f0f0f0', 
-                    tickformat=".2s",    
-                    linecolor='#d6d6d6'
-                ),
-                legend=dict(
-                    orientation="h",     
-                    yanchor="bottom",
-                    y=-0.25,             
-                    xanchor="center",
-                    x=0.5,
-                    title=""
-                ),
-                margin=dict(t=20, b=100, l=40, r=40)
-            )
-            st.plotly_chart(fig_wh, use_container_width=True)
-
-        elif chart_type == "Heatmap (Best for Overview)":
-            fig_wh = px.density_heatmap(wh_comp_df, x='DP', y='Warehouse Name', z='Sales', histfunc="sum", color_continuous_scale="Viridis", text_auto=True)
-            fig_wh.update_layout(xaxis=dict(type='category', categoryorder='array', categoryarray=period_order), height=500)
-            st.plotly_chart(fig_wh, use_container_width=True)
-            
-        else: # Small Charts (Best for Individual Trend)
-            fig_wh = px.line(wh_comp_df, x='DP', y='Sales', color='Warehouse Name', facet_col='Warehouse Name', facet_col_wrap=3, markers=True)
-            fig_wh.update_yaxes(matches=None)
-            fig_wh.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-            st.plotly_chart(fig_wh, use_container_width=True)
-
-        st.divider()
-
-        # =========================================================
-        # PART 4: Channel & Customer Analysis (Section 3 - 支持多月份对比)
-        # =========================================================
-        st.subheader("3. Channel & Customer Analysis")
+        st.subheader("2. Channel & Customer Analysis")
         ar_col1, col_spacer, ar_col2 = st.columns([1, 0.1, 1])
         
         with ar_col1:
@@ -1133,8 +1055,8 @@ with tab2:
                     }
                 )
 
-        st.subheader("3.1 Detailed Customer & Product Breakdown")
-        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+        st.subheader("2.1 Detailed Customer & Product Breakdown")
+        st.caption("💡Displaying data for the [Primary Date Range] only")
 
         dd_col1, dd_col2, dd_col3 = st.columns(3)
 
@@ -1220,7 +1142,7 @@ with tab2:
         # =========================================================
         # PART 5: Product Performance & Sparklines (Section 4)
         # =========================================================
-        st.subheader("4. Product Performance & Trend Analysis")
+        st.subheader("3. Product Performance & Trend Analysis")
         
         # --- A. 获取“当月”和“上月”的周期 ---
         curr_month_period = pd.to_datetime(date_range[1]).to_period('M')
@@ -1266,13 +1188,14 @@ with tab2:
                         "Sales": st.column_config.NumberColumn(format="RM%.2f")
                     }
                 )
-
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
         # =========================================================
         # PART 5.1: Product-to-Customer Drill-down (仅跟随主日期)
         # =========================================================
         st.markdown("---")
-        st.subheader("🔍 Product Sales Traceability")
-        st.caption("💡 备注：此表仅显示【主日期范围】的数据。")
+        st.subheader("3.1 Product Sales Traceability")
+        st.caption("💡Displaying data for the [Primary Date Range] only.")
 
         p_col1, p_col2, p_col3 = st.columns(3)
 
