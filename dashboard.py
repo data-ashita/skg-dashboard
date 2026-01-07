@@ -1140,7 +1140,7 @@ with tab2:
         st.divider()
         
         # =========================================================
-        # PART 5: Product Performance & Sparklines (Section 4)
+        # PART 3: Product Performance & Sparklines (Section 4)
         # =========================================================
         st.subheader("3. Product Performance & Trend Analysis")
         
@@ -1191,9 +1191,8 @@ with tab2:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
         # =========================================================
-        # PART 5.1: Product-to-Customer Drill-down (仅跟随主日期)
+        # PART 3.1: Product-to-Customer Drill-down (仅跟随主日期)
         # =========================================================
-        st.markdown("---")
         st.subheader("3.1 Product Sales Traceability")
         st.caption("💡Displaying data for the [Primary Date Range] only.")
 
