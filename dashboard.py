@@ -926,30 +926,46 @@ with tab1:
             default="All"
         )
 
-        # 执行过滤逻辑
+        # 【修改】: 过滤逻辑现在基于 df_stock (它包含0库存)，而不是 df_stock_positive
         if stock_filter == "Warehouse":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'WAREHOUSE']
+            display_stock = df_stock[df_stock['Warehouse Type'] == 'WAREHOUSE']
         elif stock_filter == "Consign":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'] == 'CONSIGN']
+            display_stock = df_stock[df_stock['Warehouse Type'] == 'CONSIGN']
         elif stock_filter == "Warehouse and Consign":
-            display_stock = df_stock_positive[df_stock_positive['Warehouse Type'].isin(['WAREHOUSE', 'CONSIGN'])]
+            display_stock = df_stock[df_stock['Warehouse Type'].isin(['WAREHOUSE', 'CONSIGN'])]
         else:
-            display_stock = df_stock_positive
+            # "All" 选项
+            display_stock = df_stock
 
         # 检查过滤后是否为空
         if display_stock.empty:
             st.info(f"No stock found for: {stock_filter} (Check if the Type is correct in Master Data)")
         else:
-            # 【修改】: 移除 .nlargest(20) 来获取所有SKU
-            all_stock = display_stock.groupby('Stock Name')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=True)
+            # 【修改】:
+            # - 基于 display_stock (包含0库存) 进行汇总
+            # - 按 'Stock Name' 排序，而不是按 'Quantity'
+            all_stock = display_stock.groupby('Stock Name')['Quantity'].sum().reset_index().sort_values('Stock Name', ascending=True)
             
-            # 【修改】: 根据物料数量动态调整图表高度
-            # 为每个物料分配约30像素的高度，设置一个600像素的保底高度
+            # 根据物料数量动态调整图表高度
             chart_height = max(600, len(all_stock) * 30)
 
             # 使用新的 all_stock DataFrame 和动态高度来创建图表
-            fig_bar = px.bar(all_stock, x='Quantity', y='Stock Name', orientation='h', text_auto=True, color='Quantity', color_continuous_scale='Blues')
-            fig_bar.update_layout(height=chart_height, yaxis_title=None)
+            fig_bar = px.bar(
+                all_stock, 
+                x='Quantity', 
+                y='Stock Name', 
+                orientation='h', 
+                text_auto=True, 
+                color='Quantity', 
+                color_continuous_scale='Blues'
+            )
+            fig_bar.update_traces(texttemplate='%{x:,.0f}')
+            # 【修改】: 让y轴按字母顺序从上到下排列
+            fig_bar.update_layout(
+                height=chart_height, 
+                yaxis_title=None,
+                yaxis={'categoryorder':'total ascending'} # 关键修改
+            )
             st.plotly_chart(fig_bar, use_container_width=True)
 
         st.divider()
@@ -1433,114 +1449,54 @@ with tab3:
 
 # === TAB 4: POSM ===
 with tab4:
-    st.header("POSM Inventory Overview")
+    st.header("POSM Inventory")
+    st.caption("This chart shows the total quantity for every POSM item, sorted by Stock Code. It is not affected by sidebar filters.")
 
-    # --- 1. 直接使用已在侧边栏过滤过的 df_posm ---
-    # (这个注释提醒我们，df_posm 已经是过滤后的结果)
-    
-    # --- 2. 数据预处理 (仅呈现 > 0 的数据) ---
-    df_posm_positive = df_posm[df_posm['Quantity'] > 0].copy()
-
-    if df_posm_positive.empty:
-        st.warning("No active POSM stock balance (>0) found for the selected filter.")
+    # --- 1. 使用最原始的、未经过滤的 df_posm_raw 数据 ---
+    # 【修改】: 直接使用 df_posm_raw 来确保不受任何过滤影响
+    if df_posm_raw.empty:
+        st.warning("No data found in the 'posm_details' table.")
     else:
-        # --- 3. 顶部汇总与图表 ---
-        posm_summary_df = df_posm_positive.groupby('Warehouse Name')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=False)
-        total_posm_qty = posm_summary_df['Quantity'].sum()
+        # --- 2. 汇总所有物料的总库存 ---
+        # 【修改】:
+        # - 使用 df_posm_raw
+        # - Group by 'Stock Code' 和 'Stock Name'
+        # - .sum() 会计算每个物料在所有仓库的总量
+        all_posm_items = df_posm_raw.groupby(
+            ['Stock Code', 'Stock Name']
+        )['Quantity'].sum().reset_index()
 
-        # 【核心修复】: 使用 np.where 来安全地计算百分比
-        # 如果 total_posm_qty > 0，则计算百分比；否则，直接返回 0.0
-        posm_summary_df['% Share'] = np.where(
-            total_posm_qty > 0, 
-            (posm_summary_df['Quantity'] / total_posm_qty * 100),
-            0.0
-        )
-        # 格式化为字符串
-        posm_summary_df['% Share'] = posm_summary_df['% Share'].apply(lambda x: f"{x:.1f}%")
+        # --- 3. 按 Stock Code 排序 ---
+        # 【修改】: sort_values by 'Stock Code'
+        # 注意：对于图表，我们需要倒序排列，这样在垂直条形图中，A开头的编码会在顶部
+        all_posm_items = all_posm_items.sort_values(by='Stock Code', ascending=False)
         
-        col_pie, col_spacer, col_table = st.columns([1, 0.2, 1]) 
-        
-        with col_pie:
-            st.subheader("Distribution")
-            # 注意：饼图需要数值，所以我们使用原始的 'Quantity' 列
-            fig_pie = px.pie(posm_summary_df, values='Quantity', names='Warehouse Name', hole=0.5)
-            fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        s_max = posm_summary_df['Quantity'].max()
-        safe_s_max = int(s_max) if pd.notna(s_max) and s_max > 0 else 100
-
-        with col_table:
-            st.subheader("Balance Summary")
-            st.metric(label="Total Active POSM Stock (Qty > 0)", value=f"{total_posm_qty:,.0f}")
-            st.dataframe(
-                posm_summary_df,
-                hide_index=True,
-                use_container_width=True,
-                height=300,
-                column_config={
-                    "Warehouse Name": "Warehouse",
-                    "Quantity": st.column_config.ProgressColumn(
-                        "Stock Qty", format="%d", min_value=0, max_value=safe_s_max
-                    )
-                }
-            )
-
-        st.divider()
-
-        # --- 4. 显示全部 POSM Items by Quantity ---
-        st.subheader("All POSM Items by Quantity")
-        
-        all_posm_items = df_posm_positive.groupby('Stock Name')['Quantity'].sum().reset_index().sort_values('Quantity', ascending=True)
-        
+        # --- 4. 使用 Bar Chart 显示 ---
         if all_posm_items.empty:
-            st.info("No POSM items with stock > 0 found.")
+            st.info("No POSM items found to display.")
         else:
-            chart_height = max(600, len(all_posm_items) * 25)
-            fig_bar = px.bar(all_posm_items, x='Quantity', y='Stock Name', orientation='h', text_auto=True, color='Quantity', color_continuous_scale='Blues')
-            fig_bar.update_layout(height=chart_height, yaxis_title=None)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            # 【修改】: 根据物料数量动态调整图表高度
+            chart_height = max(600, len(all_posm_items) * 32)
 
-        st.divider()
-
-        # --- 5. Location Details (按仓库钻取) ---
-        st.subheader("Location Details")
-        st.caption("✨ Tip: Click a row to see item details for that location.")
-
-        active_warehouses = df_posm_positive['Warehouse Name'].unique()
-        grid_cols = st.columns(3)
-        
-        for i, wh_name in enumerate(active_warehouses):
-            warehouse_data = df_posm_positive[df_posm_positive['Warehouse Name'] == wh_name]
-            q_max = warehouse_data['Quantity'].max()
-            safe_max = int(q_max) if pd.notna(q_max) and q_max > 0 else 100
+            # 【修改】:
+            # - y轴使用 'Stock Name' 来显示
+            # - Plotly 会根据 DataFrame 的顺序来渲染，因为我们已经按 Stock Code 排序，所以图表也是有序的
+            fig_bar = px.bar(
+                all_posm_items, 
+                x='Quantity', 
+                y='Stock Name', 
+                orientation='h', 
+                text_auto=True, 
+                color='Quantity', 
+                color_continuous_scale='Blues',
+                # 添加悬停数据以显示Stock Code
+                hover_data=['Stock Code'] 
+            )
             
-            with grid_cols[i % 3]:
-                with st.container(border=True):
-                    st.markdown(f"**{wh_name}**")
-                    
-                    # 准备用于显示的DataFrame，并按数量降序排列
-                    display_data = warehouse_data[['Stock Name', 'Quantity']].sort_values('Quantity', ascending=False)
-
-                    event = st.dataframe(
-                        display_data,
-                        hide_index=True,
-                        use_container_width=True,
-                        height=280,
-                        on_select="rerun",           
-                        selection_mode="single-row",
-                        key=f"df_posm_{wh_name.replace(' ', '_')}",         
-                        column_config={
-                            "Stock Name": "Item Name",
-                            "Quantity": st.column_config.ProgressColumn(
-                                "Qty", format="%d", min_value=0, max_value=safe_max
-                            )
-                        }
-                    )
-                    
-                    if event and event.selection.rows:
-                        selected_index = event.selection.rows[0]
-                        # 从用于显示的、已排序的DataFrame中获取被点击的行
-                        selected_item_name = display_data.iloc[selected_index]['Stock Name']
-                        st.markdown(f"---")
-                        st.success(f"You selected: **{selected_item_name}** in **{wh_name}**.")
+            fig_bar.update_traces(texttemplate='%{x:,.0f}') # 格式化条形图上的数字
+            fig_bar.update_layout(
+                height=chart_height, 
+                yaxis_title=None,
+                title="Total Quantity of All POSM Items (Sorted by Stock Code)"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
