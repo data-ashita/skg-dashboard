@@ -858,6 +858,57 @@ with st.sidebar.expander("📄 Export PDF Report", expanded=False):
                     use_container_width=True
                 )
 
+with st.sidebar.expander("📥 Export Filtered Table", expanded=False):
+
+    @st.cache_data
+    def convert_df_to_csv(df):
+        return df.to_csv(index=False).encode('utf-8')
+
+    table_to_export = st.selectbox(
+        "Select a table to export:",
+        ("Stock", "Sales", "POSM"),
+        key="export_table_select"
+    )
+
+    # 【核心修改】: 在这里应用日期过滤器
+    # 获取侧边栏选择的日期范围
+    start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+
+    if table_to_export == "Stock":
+        # 对 df_stock_raw 应用日期过滤
+        df_for_export = df_stock_raw[
+            (pd.to_datetime(df_stock_raw['Date']) >= start_date) &
+            (pd.to_datetime(df_stock_raw['Date']) <= end_date)
+        ]
+        file_name = f"stock_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.csv"
+        
+    elif table_to_export == "Sales":
+        # 对 df_sales_raw 应用日期过滤
+        df_for_export = df_sales_raw[
+            (pd.to_datetime(df_sales_raw['Date']) >= start_date) &
+            (pd.to_datetime(df_sales_raw['Date']) <= end_date)
+        ]
+        file_name = f"sales_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.csv"
+
+    elif table_to_export == "POSM":
+        # 对 df_posm_raw 应用日期过滤
+        df_for_export = df_posm_raw[
+            (pd.to_datetime(df_posm_raw['Date']) >= start_date) &
+            (pd.to_datetime(df_posm_raw['Date']) <= end_date)
+        ]
+        file_name = f"posm_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.csv"
+
+    # 转换数据为CSV格式
+    csv_data = convert_df_to_csv(df_for_export)
+
+    st.download_button(
+       label=f"🚀 Download",
+       data=csv_data,
+       file_name=file_name,
+       mime='text/csv',
+       use_container_width=True
+    )
+
 # --- 6. 主面板 ---
 st.title("SKG Business Analytics")
 
@@ -967,6 +1018,67 @@ with tab1:
                 yaxis={'categoryorder':'total ascending'} # 关键修改
             )
             st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.divider()
+        st.subheader("🔍 Find Where a Specific Product is Stored (Live Search)")
+
+        # 1. 创建一个文本输入框作为搜索栏
+        search_term = st.text_input(
+            "Type any part of the product name to search:",
+            placeholder="e.g., G7, F3, Eye Massager"
+        )
+
+        # 2. 只有当用户输入了内容时才进行搜索
+        if search_term:
+            # 3. 从 display_stock 中筛选出所有匹配的产品
+            #    - str.contains(search_term, case=False) 实现模糊搜索，不区分大小写
+            #    - drop_duplicates() 确保每个产品只在列表中出现一次
+            matching_products = display_stock[
+                display_stock['Stock Name'].str.contains(search_term, case=False, na=False)
+            ][['Stock Name']].drop_duplicates().sort_values('Stock Name')
+
+            if not matching_products.empty:
+                st.markdown("**Step 1: Select a product from the search results below**")
+                
+                # 4. 使用 st.dataframe 显示搜索结果，并启用行选择
+                event = st.dataframe(
+                    matching_products,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",  # 点击行后刷新页面
+                    selection_mode="single-row",
+                    key="product_search_result"
+                )
+
+                # 5. 检查是否有行被选中
+                if event.selection.rows:
+                    selected_index = event.selection.rows[0]
+                    selected_product_name = matching_products.iloc[selected_index]['Stock Name']
+                    
+                    st.markdown(f"**Step 2: Locations for *{selected_product_name}***")
+
+                    # 6. 查询并显示该产品的库存地点
+                    product_location_df = display_stock[
+                        (display_stock['Stock Name'] == selected_product_name) &
+                        (display_stock['Quantity'] > 0)
+                    ].copy()
+
+                    if not product_location_df.empty:
+                        st.dataframe(
+                            product_location_df[['Warehouse Name', 'Warehouse Type', 'Quantity']].sort_values('Quantity', ascending=False),
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Warehouse Name": "Location",
+                                "Warehouse Type": "Location Type",
+                                "Quantity": st.column_config.NumberColumn("Stock on Hand", format="%d")
+                            }
+                        )
+                    else:
+                        st.info(f"This product is currently out of stock everywhere.")
+
+            else:
+                st.warning(f"No products found matching '{search_term}'.")
 
         st.divider()
 
