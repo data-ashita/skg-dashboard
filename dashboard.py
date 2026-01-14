@@ -71,7 +71,7 @@ class SKG_Report(FPDF):
             self.set_text_color(150, 150, 150)
             self.cell(0, 10, f'Page {self.page_no()} | Generated on {datetime.now().strftime("%Y-%m-%d")}', 0, 0, 'C')
 
-supabase = init_connection()
+# supabase = init_connection()  # 已移除：改為在函數內部動態獲取連接
 
 # --- 3. 简易登录 ---
 def check_password():
@@ -106,6 +106,8 @@ if not check_password():
 # --- 4. 数据加载 (从 Supabase 读取) ---
 @st.cache_data(ttl=600) # 每10分钟清理一次缓存，或手动刷新
 def load_data_from_supabase():
+    # 在函數內部獲取連接，確保使用最新的、健康的連接對象
+    supabase = init_connection()
     try:
         # 1. 加载主表 (warehouse 和 ar)
         wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
@@ -195,7 +197,11 @@ def load_data_from_supabase():
         
         return df_stock, df_sales, df_posm
     except Exception as e:
-        st.error(f"Error during data loading: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        st.error(f"數據庫連接或查詢失敗: {str(e)}")
+        with st.expander("查看詳細錯誤信息"):
+            st.code(error_details)
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
 df_stock_raw, df_sales_raw, df_posm_raw = load_data_from_supabase()
