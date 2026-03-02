@@ -105,35 +105,33 @@ if not check_password():
 # --- 4. 数据加载 (从 Supabase 读取) ---
 @st.cache_data(ttl=600) # 每10分钟清理一次缓存，或手动刷新
 def load_data_from_supabase():
+    # 在函數內部獲取連接，確保使用最新的、健康的連接對象
     supabase = init_connection()
     try:
-        # 1. 加载主表，但只选择需要的列，并提前重命名
-        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").limit(10000).execute()
+        # 1. 加载主表 (warehouse 和 ar)
+        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
         df_wh_master = pd.DataFrame(wh_res.data)
         if not df_wh_master.empty:
-            # 【最终修复】只选取需要的列，避免merge冲突
-            df_wh_master_to_merge = df_wh_master[['warehouse_code', 'warehouse_name', 'warehouse_type']].copy()
-            df_wh_master_to_merge.rename(columns={'warehouse_type': 'Master_WH_Type'}, inplace=True)
-            df_wh_master_to_merge['warehouse_code'] = df_wh_master_to_merge['warehouse_code'].astype(str).str.strip().str.upper()
-            df_wh_master_to_merge['warehouse_name'] = df_wh_master_to_merge['warehouse_name'].astype(str).str.strip()
+            df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip().str.upper()
+            df_wh_master['warehouse_name'] = df_wh_master['warehouse_name'].astype(str).str.strip()
+            df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip().str.upper() # 类型也转为大写以统一
 
-        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").limit(10000).execute()
+        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").execute()
         df_ar_master = pd.DataFrame(ar_res.data)
         if not df_ar_master.empty:
-            # 【最终修复】只选取需要的列，避免merge冲突
-            df_ar_master_to_merge = df_ar_master[['ar_code', 'ar_name', 'ar_type']].copy()
-            df_ar_master_to_merge.rename(columns={'ar_type': 'Master_AR_Type'}, inplace=True)
-            df_ar_master_to_merge['ar_code'] = df_ar_master_to_merge['ar_code'].astype(str).str.strip().str.upper()
-            df_ar_master_to_merge['ar_name'] = df_ar_master_to_merge['ar_name'].astype(str).str.strip()
+            df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip().str.upper()
+            df_ar_master['ar_name'] = df_ar_master['ar_name'].astype(str).str.strip()
+            df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
 
         # 2. 读取库存表并关联
-        stock_response = supabase.table("stock_details").select("*").limit(10000).execute()
+        stock_response = supabase.table("stock_details").select("*").execute()
         df_stock = pd.DataFrame(stock_response.data)
-        if not df_stock.empty and 'df_wh_master_to_merge' in locals():
+        if not df_stock.empty and not df_wh_master.empty:
             df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip().str.upper()
             df_stock['Warehouse Name'] = df_stock['Warehouse Name'].astype(str).str.strip()
+            wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
             df_stock = pd.merge(
-                df_stock, df_wh_master_to_merge, 
+                df_stock, wh_m, 
                 left_on=['Warehouse Code', 'Warehouse Name'], 
                 right_on=['warehouse_code', 'warehouse_name'], 
                 how='left'
@@ -141,44 +139,50 @@ def load_data_from_supabase():
             df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock.get('warehouse_type'))
 
         # 3. 读取销售表并关联
-        sales_response = supabase.table("sales_details").select("*").limit(10000).execute()
+        sales_response = supabase.table("sales_details").select("*").execute()
         df_sales = pd.DataFrame(sales_response.data)
         if not df_sales.empty:
+            # (关联仓库和AR的逻辑保持不变)
             df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip().str.upper()
             df_sales['Warehouse Name'] = df_sales['Warehouse Name'].astype(str).str.strip()
             df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip().str.upper()
             df_sales['AR Name'] = df_sales['AR Name'].astype(str).str.strip()
-            
-            if 'df_wh_master_to_merge' in locals():
+            if not df_wh_master.empty:
+                wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
                 df_sales = pd.merge(
-                    df_sales, df_wh_master_to_merge, 
+                    df_sales, wh_m, 
                     left_on=['Warehouse Code', 'Warehouse Name'], 
                     right_on=['warehouse_code', 'warehouse_name'], 
                     how='left'
                 )
                 df_sales['warehouse_type'] = df_sales['Master_WH_Type'].fillna(df_sales.get('warehouse_type'))
-            
-            if 'df_ar_master_to_merge' in locals():
+            if not df_ar_master.empty:
+                ar_m = df_ar_master.rename(columns={'ar_type': 'Master_AR_Type'})
                 df_sales = pd.merge(
-                    df_sales, df_ar_master_to_merge, 
+                    df_sales, ar_m, 
                     left_on=['AR Code', 'AR Name'], 
                     right_on=['ar_code', 'ar_name'], 
                     how='left'
                 )
                 df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales.get('ar_type'))
 
-        # 4. 读取 POSM 表并关联
-        posm_response = supabase.table("posm_details").select("*").limit(10000).execute()
+        # 4. 【核心修改】读取 POSM_DETAILS 表并关联
+        posm_response = supabase.table("posm_details").select("*").execute()
         df_posm = pd.DataFrame(posm_response.data)
-        if not df_posm.empty and 'df_wh_master_to_merge' in locals():
+        if not df_posm.empty and not df_wh_master.empty:
+            # 清洗 POSM 表的仓库 code 和 name
             df_posm['Warehouse Code'] = df_posm['Warehouse Code'].astype(str).str.strip().str.upper()
             df_posm['Warehouse Name'] = df_posm['Warehouse Name'].astype(str).str.strip()
+            
+            # 关联仓库主表以获取 warehouse_type
+            wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
             df_posm = pd.merge(
-                df_posm, df_wh_master_to_merge,
+                df_posm, wh_m,
                 left_on=['Warehouse Code', 'Warehouse Name'],
                 right_on=['warehouse_code', 'warehouse_name'],
                 how='left'
             )
+            # 优先使用主表中的类型
             df_posm['warehouse_type'] = df_posm['Master_WH_Type'].fillna(df_posm.get('warehouse_type'))
 
         # 5. 统一重命名
@@ -188,7 +192,7 @@ def load_data_from_supabase():
         }
         df_stock = df_stock.rename(columns=final_rename)
         df_sales = df_sales.rename(columns=final_rename)
-        df_posm = df_posm.rename(columns=final_rename)
+        df_posm = df_posm.rename(columns=final_rename) # 对 df_posm 也应用重命名
         
         return df_stock, df_sales, df_posm
     except Exception as e:
@@ -1145,6 +1149,8 @@ with tab2:
         (df_sales['Date'] <= pd.to_datetime(date_range[1]))
     )
     df_curr = df_sales[mask_curr].copy()
+
+    df_curr = df_curr.reset_index(drop=True)
 
     # --- 3. 过滤对比周期数据 (如果启用) ---
     df_comp_sidebar = pd.DataFrame()
