@@ -5,4 +5,5 @@ numpy
 supabase
 fpdf2
 kaleido
+psycopg2-binary
 openpyxl
