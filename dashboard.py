@@ -109,14 +109,14 @@ def load_data_from_supabase():
     supabase = init_connection()
     try:
         # 1. 加载主表 (warehouse 和 ar)
-        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
+        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").limit(10000).execute()
         df_wh_master = pd.DataFrame(wh_res.data)
         if not df_wh_master.empty:
             df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip().str.upper()
             df_wh_master['warehouse_name'] = df_wh_master['warehouse_name'].astype(str).str.strip()
             df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip().str.upper() # 类型也转为大写以统一
 
-        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").execute()
+        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").limit(10000).execute()
         df_ar_master = pd.DataFrame(ar_res.data)
         if not df_ar_master.empty:
             df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip().str.upper()
@@ -124,7 +124,7 @@ def load_data_from_supabase():
             df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
 
         # 2. 读取库存表并关联
-        stock_response = supabase.table("stock_details").select("*").execute()
+        stock_response = supabase.table("stock_details").select("*").limit(10000).execute()
         df_stock = pd.DataFrame(stock_response.data)
         if not df_stock.empty and not df_wh_master.empty:
             df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip().str.upper()
@@ -139,7 +139,7 @@ def load_data_from_supabase():
             df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock.get('warehouse_type'))
 
         # 3. 读取销售表并关联
-        sales_response = supabase.table("sales_details").select("*").execute()
+        sales_response = supabase.table("sales_details").select("*").limit(10000).execute()
         df_sales = pd.DataFrame(sales_response.data)
         if not df_sales.empty:
             # (关联仓库和AR的逻辑保持不变)
@@ -167,7 +167,7 @@ def load_data_from_supabase():
                 df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales.get('ar_type'))
 
         # 4. 【核心修改】读取 POSM_DETAILS 表并关联
-        posm_response = supabase.table("posm_details").select("*").execute()
+        posm_response = supabase.table("posm_details").select("*").limit(10000).execute()
         df_posm = pd.DataFrame(posm_response.data)
         if not df_posm.empty and not df_wh_master.empty:
             # 清洗 POSM 表的仓库 code 和 name
