@@ -115,7 +115,7 @@ def load_data_from_supabase():
         if not df_wh_master.empty:
             df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip().str.upper()
             df_wh_master['warehouse_name'] = df_wh_master['warehouse_name'].astype(str).str.strip()
-            df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip().str.upper() # 类型也转为大写以统一
+            df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip().str.upper()
 
         ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").execute()
         df_ar_master = pd.DataFrame(ar_res.data)
@@ -124,7 +124,7 @@ def load_data_from_supabase():
             df_ar_master['ar_name'] = df_ar_master['ar_name'].astype(str).str.strip()
             df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
 
-        # 2. 读取库存表并关联
+        # 2. 读取库存表并关联 (这部分逻辑暂时不影响我们，保持原样)
         stock_response = supabase.table("stock_details").select("*").execute()
         df_stock = pd.DataFrame(stock_response.data)
         if not df_stock.empty and not df_wh_master.empty:
@@ -142,8 +142,29 @@ def load_data_from_supabase():
         # 3. 读取销售表并关联
         sales_response = supabase.table("sales_details").select("*").execute()
         df_sales = pd.DataFrame(sales_response.data)
+        
+        # ======================= 诊断代码开始 =======================
+        st.subheader("🕵️‍♂️ 数据加载诊断信息")
         if not df_sales.empty:
-            # (关联仓库和AR的逻辑保持不变)
+            df_sales_debug = df_sales.copy()
+            df_sales_debug['Date'] = pd.to_datetime(df_sales_debug['Date'])
+            
+            latest_date_before_merge = df_sales_debug['Date'].max()
+            st.info(f"1. **合并前**: 从数据库直接读取的 `sales_details` 表中，最晚日期是: **{latest_date_before_merge.strftime('%Y-%m-%d')}**")
+            
+            # 检查3月1日的数据是否存在
+            march_data_before = df_sales_debug[df_sales_debug['Date'].dt.month == 3]
+            if not march_data_before.empty:
+                st.write("✅ 成功找到3月份的数据，以下是它们的 `Warehouse Code` 和 `AR Code`:")
+                st.dataframe(march_data_before[['Date', 'Warehouse Code', 'AR Code', 'Stock Name']])
+            else:
+                st.error("❌ **严重问题**: 在合并前就找不到3月份的数据了！请检查Supabase查询。")
+
+        else:
+            st.warning("`sales_details` 表为空，无法进行诊断。")
+        # ======================= 诊断代码结束 =======================
+
+        if not df_sales.empty:
             df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip().str.upper()
             df_sales['Warehouse Name'] = df_sales['Warehouse Name'].astype(str).str.strip()
             df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip().str.upper()
@@ -167,15 +188,12 @@ def load_data_from_supabase():
                 )
                 df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales.get('ar_type'))
 
-        # 4. 【核心修改】读取 POSM_DETAILS 表并关联
+        # 4. 读取 POSM_DETAILS 表并关联 (保持原样)
         posm_response = supabase.table("posm_details").select("*").execute()
         df_posm = pd.DataFrame(posm_response.data)
         if not df_posm.empty and not df_wh_master.empty:
-            # 清洗 POSM 表的仓库 code 和 name
             df_posm['Warehouse Code'] = df_posm['Warehouse Code'].astype(str).str.strip().str.upper()
             df_posm['Warehouse Name'] = df_posm['Warehouse Name'].astype(str).str.strip()
-            
-            # 关联仓库主表以获取 warehouse_type
             wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
             df_posm = pd.merge(
                 df_posm, wh_m,
@@ -183,7 +201,6 @@ def load_data_from_supabase():
                 right_on=['warehouse_code', 'warehouse_name'],
                 how='left'
             )
-            # 优先使用主表中的类型
             df_posm['warehouse_type'] = df_posm['Master_WH_Type'].fillna(df_posm.get('warehouse_type'))
 
         # 5. 统一重命名
@@ -193,8 +210,22 @@ def load_data_from_supabase():
         }
         df_stock = df_stock.rename(columns=final_rename)
         df_sales = df_sales.rename(columns=final_rename)
-        df_posm = df_posm.rename(columns=final_rename) # 对 df_posm 也应用重命名
+        df_posm = df_posm.rename(columns=final_rename)
         
+        # ======================= 诊断代码 Part 2 =======================
+        if not df_sales.empty:
+            df_sales_after_debug = df_sales.copy()
+            # 注意：此时Date列还是字符串，需要转换
+            df_sales_after_debug['Date'] = pd.to_datetime(df_sales_after_debug['Date'])
+            latest_date_after_merge = df_sales_after_debug['Date'].max()
+            st.info(f"2. **合并后**: 经过与 `warehouse` 和 `ar` 表关联后，`df_sales` 中的最晚日期是: **{latest_date_after_merge.strftime('%Y-%m-%d')}**")
+            
+            if latest_date_after_merge.month < 3:
+                 st.error("❌ **问题定位**: 合并操作后，3月份的数据丢失了！请检查3月1日销售记录的 `Warehouse Code/Name` 和 `AR Code/Name` 是否存在于主表中。")
+                 st.write("以下是3月1日数据在合并前的 `Warehouse Code` 和 `AR Code`，请在 `warehouse` 和 `ar` 表中核对它们是否存在：")
+                 st.dataframe(march_data_before[['Date', 'Warehouse Code', 'AR Code', 'Stock Name']])
+        # ======================= 诊断代码结束 =======================
+
         return df_stock, df_sales, df_posm
     except Exception as e:
         import traceback
@@ -1617,4 +1648,5 @@ with tab4:
                 yaxis_title=None,
                 title="Total Quantity of All POSM Items (Sorted by Stock Code)"
             )
+
             st.plotly_chart(fig_bar, use_container_width=True)
