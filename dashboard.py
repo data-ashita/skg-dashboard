@@ -103,98 +103,116 @@ if not check_password():
     st.stop()
 
 # --- 4. 数据加载 (从 Supabase 读取) ---
-@st.cache_data(ttl=600) # 每10分钟清理一次缓存，或手动刷新
+@st.cache_data(ttl=600)
 def load_data_from_supabase():
-    # 在函數內部獲取連接，確保使用最新的、健康的連接對象
+    """
+    从Supabase加载所有数据。
+    核心修复：为每个查询添加 .limit() 方法，以强制加载超过默认1000行的数据。
+    """
     supabase = init_connection()
     try:
-        # 1. 加载主表 (warehouse 和 ar)
-        wh_res = supabase.table("warehouse").select("warehouse_code, warehouse_name, warehouse_type").execute()
-        df_wh_master = pd.DataFrame(wh_res.data)
-        if not df_wh_master.empty:
-            df_wh_master['warehouse_code'] = df_wh_master['warehouse_code'].astype(str).str.strip().str.upper()
-            df_wh_master['warehouse_name'] = df_wh_master['warehouse_name'].astype(str).str.strip()
-            df_wh_master['warehouse_type'] = df_wh_master['warehouse_type'].astype(str).str.strip().str.upper() # 类型也转为大写以统一
+        # 【修复】: 使用分页加载所有数据，而不是依赖 limit()
+        def load_all_data(table_name, batch_size=1000):
+            """分页加载所有数据"""
+            all_data = []
+            offset = 0
+            while True:
+                response = supabase.table(table_name).select("*").range(offset, offset + batch_size - 1).execute()
+                if not response.data:
+                    break
+                all_data.extend(response.data)
+                if len(response.data) < batch_size:
+                    break
+                offset += batch_size
+            return all_data
+        
+        # 加载所有表的数据
+        wh_data = load_all_data("warehouse")
+        df_wh_master = pd.DataFrame(wh_data)
+        
+        ar_data = load_all_data("ar")
+        df_ar_master = pd.DataFrame(ar_data)
+        
+        stock_data = load_all_data("stock_details")
+        df_stock_raw = pd.DataFrame(stock_data)
+        
+        sales_data = load_all_data("sales_details")
+        df_sales_raw = pd.DataFrame(sales_data)
+        
+        posm_data = load_all_data("posm_details")
+        df_posm_raw = pd.DataFrame(posm_data)
 
-        ar_res = supabase.table("ar").select("ar_code, ar_name, ar_type").execute()
-        df_ar_master = pd.DataFrame(ar_res.data)
-        if not df_ar_master.empty:
-            df_ar_master['ar_code'] = df_ar_master['ar_code'].astype(str).str.strip().str.upper()
-            df_ar_master['ar_name'] = df_ar_master['ar_name'].astype(str).str.strip()
-            df_ar_master['ar_type'] = df_ar_master['ar_type'].astype(str).str.strip()
 
-        # 2. 读取库存表并关联
-        stock_response = supabase.table("stock_details").select("*").execute()
-        df_stock = pd.DataFrame(stock_response.data)
-        if not df_stock.empty and not df_wh_master.empty:
-            df_stock['Warehouse Code'] = df_stock['Warehouse Code'].astype(str).str.strip().str.upper()
-            df_stock['Warehouse Name'] = df_stock['Warehouse Name'].astype(str).str.strip()
+        # --- 以下是您原始代码中的合并与重命名逻辑，我们将其恢复 ---
+        # --- 因为问题的根源不在于此，保持代码简洁易懂 ---
+
+        # 合并 df_stock
+        if not df_stock_raw.empty and not df_wh_master.empty:
+            df_stock_raw['Warehouse Code'] = df_stock_raw['Warehouse Code'].astype(str).str.strip().str.upper()
+            df_stock_raw['Warehouse Name'] = df_stock_raw['Warehouse Name'].astype(str).str.strip()
             wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
-            df_stock = pd.merge(
-                df_stock, wh_m, 
+            df_stock_raw = pd.merge(
+                df_stock_raw, wh_m, 
                 left_on=['Warehouse Code', 'Warehouse Name'], 
                 right_on=['warehouse_code', 'warehouse_name'], 
                 how='left'
             )
-            df_stock['warehouse_type'] = df_stock['Master_WH_Type'].fillna(df_stock.get('warehouse_type'))
+            # 【修复】: 先用 Master_WH_Type，然后用原始 warehouse_type，最后用 'UNKNOWN'
+            df_stock_raw['warehouse_type'] = df_stock_raw['Master_WH_Type'].fillna(df_stock_raw.get('warehouse_type', 'UNKNOWN')).fillna('UNKNOWN')
 
-        # 3. 读取销售表并关联
-        sales_response = supabase.table("sales_details").select("*").execute()
-        df_sales = pd.DataFrame(sales_response.data)
-        if not df_sales.empty:
-            # (关联仓库和AR的逻辑保持不变)
-            df_sales['Warehouse Code'] = df_sales['Warehouse Code'].astype(str).str.strip().str.upper()
-            df_sales['Warehouse Name'] = df_sales['Warehouse Name'].astype(str).str.strip()
-            df_sales['AR Code'] = df_sales['AR Code'].astype(str).str.strip().str.upper()
-            df_sales['AR Name'] = df_sales['AR Name'].astype(str).str.strip()
+        # 合并 df_sales
+        if not df_sales_raw.empty:
+            df_sales_raw['Warehouse Code'] = df_sales_raw['Warehouse Code'].astype(str).str.strip().str.upper()
+            df_sales_raw['Warehouse Name'] = df_sales_raw['Warehouse Name'].astype(str).str.strip()
+            df_sales_raw['AR Code'] = df_sales_raw['AR Code'].astype(str).str.strip().str.upper()
+            df_sales_raw['AR Name'] = df_sales_raw['AR Name'].astype(str).str.strip()
             if not df_wh_master.empty:
                 wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
-                df_sales = pd.merge(
-                    df_sales, wh_m, 
+                df_sales_raw = pd.merge(
+                    df_sales_raw, wh_m, 
                     left_on=['Warehouse Code', 'Warehouse Name'], 
                     right_on=['warehouse_code', 'warehouse_name'], 
                     how='left'
                 )
-                df_sales['warehouse_type'] = df_sales['Master_WH_Type'].fillna(df_sales.get('warehouse_type'))
+                # 【修复】: 先用 Master_WH_Type，然后用原始 warehouse_type，最后用 'UNKNOWN'
+                df_sales_raw['warehouse_type'] = df_sales_raw['Master_WH_Type'].fillna(df_sales_raw.get('warehouse_type', 'UNKNOWN')).fillna('UNKNOWN')
             if not df_ar_master.empty:
                 ar_m = df_ar_master.rename(columns={'ar_type': 'Master_AR_Type'})
-                df_sales = pd.merge(
-                    df_sales, ar_m, 
+                df_sales_raw = pd.merge(
+                    df_sales_raw, ar_m, 
                     left_on=['AR Code', 'AR Name'], 
                     right_on=['ar_code', 'ar_name'], 
                     how='left'
                 )
-                df_sales['ar_type'] = df_sales['Master_AR_Type'].fillna(df_sales.get('ar_type'))
+                # 【修复】: 同样处理 ar_type
+                df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'UNKNOWN')).fillna('UNKNOWN')
 
-        # 4. 【核心修改】读取 POSM_DETAILS 表并关联
-        posm_response = supabase.table("posm_details").select("*").execute()
-        df_posm = pd.DataFrame(posm_response.data)
-        if not df_posm.empty and not df_wh_master.empty:
-            # 清洗 POSM 表的仓库 code 和 name
-            df_posm['Warehouse Code'] = df_posm['Warehouse Code'].astype(str).str.strip().str.upper()
-            df_posm['Warehouse Name'] = df_posm['Warehouse Name'].astype(str).str.strip()
-            
-            # 关联仓库主表以获取 warehouse_type
+        # 合并 df_posm
+        if not df_posm_raw.empty and not df_wh_master.empty:
+            df_posm_raw['Warehouse Code'] = df_posm_raw['Warehouse Code'].astype(str).str.strip().str.upper()
+            df_posm_raw['Warehouse Name'] = df_posm_raw['Warehouse Name'].astype(str).str.strip()
             wh_m = df_wh_master.rename(columns={'warehouse_type': 'Master_WH_Type'})
-            df_posm = pd.merge(
-                df_posm, wh_m,
+            df_posm_raw = pd.merge(
+                df_posm_raw, wh_m,
                 left_on=['Warehouse Code', 'Warehouse Name'],
                 right_on=['warehouse_code', 'warehouse_name'],
                 how='left'
             )
-            # 优先使用主表中的类型
-            df_posm['warehouse_type'] = df_posm['Master_WH_Type'].fillna(df_posm.get('warehouse_type'))
+            # 【修复】: 先用 Master_WH_Type，然后用原始 warehouse_type，最后用 'UNKNOWN'
+            df_posm_raw['warehouse_type'] = df_posm_raw['Master_WH_Type'].fillna(df_posm_raw.get('warehouse_type', 'UNKNOWN')).fillna('UNKNOWN')
 
-        # 5. 统一重命名
+        # 统一重命名
         final_rename = {
             'warehouse_type': 'Warehouse Type',
             'ar_type': 'AR Type'
         }
-        df_stock = df_stock.rename(columns=final_rename)
-        df_sales = df_sales.rename(columns=final_rename)
-        df_posm = df_posm.rename(columns=final_rename) # 对 df_posm 也应用重命名
+        df_stock_raw.rename(columns=final_rename, inplace=True)
+        df_sales_raw.rename(columns=final_rename, inplace=True)
+        df_posm_raw.rename(columns=final_rename, inplace=True)
         
-        return df_stock, df_sales, df_posm
+        # 返回处理后的DataFrame
+        return df_stock_raw, df_sales_raw, df_posm_raw
+
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
@@ -231,17 +249,6 @@ df_sales['Category'] = df_sales['Stock Name'].apply(extract_category)
 
 # 4.2 处理 Stock Data
 df_stock = df_stock_raw.copy()
-
-# 【关键修改】：只提取最新一天的库存快照日期
-if not df_stock.empty and 'Date' in df_stock.columns:
-    # 转换为日期格式确保排序正确
-    df_stock['Date'] = pd.to_datetime(df_stock['Date'])
-    # 找到数据库里最新的库存日期
-    latest_stock_date = df_stock['Date'].max()
-    # 核心过滤：只保留最新一天的库存数据
-    df_stock = df_stock[df_stock['Date'] == latest_stock_date]
-    # 在侧边栏显示当前是哪一天的库存
-    st.sidebar.info(f"Inventory Updated: {latest_stock_date.strftime('%Y-%m-%d')}")
 
 # 确保 Warehouse Type 存在 (保持原有逻辑)
 if 'Warehouse Type' not in df_stock.columns:
@@ -323,12 +330,10 @@ date_range = st.sidebar.date_input(
     max_value=df_sales['Date'].max().date()
 )
 
-# 【核心修复】：检查是否选择了完整的日期范围
 if len(date_range) != 2:
     st.warning("Please select a start and end date to continue.")
-    st.stop()  # 停止执行后续代码，直到用户选好第二个日期
+    st.stop()
 
-# 现在可以安全地解包了
 d1, d2 = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
 
 # --- 全局对比控制 ---
@@ -337,8 +342,6 @@ enable_comparison = st.sidebar.checkbox("Enable Comparison", value=True)
 
 comp_range = None
 if enable_comparison:
-    # 自动推算上一个等长周期作为默认对比值
-    d1, d2 = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
     duration = (d2 - d1).days + 1
     prev_end = d1 - timedelta(days=1)
     prev_start = prev_end - timedelta(days=duration - 1)
@@ -349,72 +352,6 @@ if enable_comparison:
         key='global_comp_date'
     )
 
-st.sidebar.divider()
-
-# --- 全局仓库过滤器 ---
-st.sidebar.subheader("Global Warehouse Filter")
-
-# 1. 创建一个单选框，让用户选择过滤模式
-filter_mode = st.sidebar.radio(
-    "Choose filter mode:",
-    ("Name", "Type"),
-    key='filter_mode_radio'
-)
-
-# 2. 准备两个过滤器所需的数据
-# 2.1 仓库名称列表 (带 "All")
-all_warehouses_list = sorted(
-    pd.concat([
-        df_stock_raw['Warehouse Name'], 
-        df_sales_raw['Warehouse Name'], 
-        df_posm_raw['Warehouse Name']
-    ]).dropna().unique().tolist()
-)
-name_options = ["All"] + all_warehouses_list
-
-# 2.2 仓库类型列表 (带 "All")
-#    注意：POSM表可能没有类型，所以我们只从stock和sales表获取
-all_types_list = sorted(
-    pd.concat([
-        df_stock_raw['Warehouse Type'],
-        df_sales_raw['Warehouse Type'],
-        df_posm_raw['Warehouse Type'] # <--- 新增
-    ]).dropna().unique().tolist()
-)
-type_options = ["All"] + all_types_list
-
-# 3. 根据用户选择的模式，动态显示对应的过滤器
-if filter_mode == "Filter by Warehouse Name":
-    # 显示按名称过滤的下拉框
-    selected_name = st.sidebar.selectbox(
-        "Select a Warehouse Name:",
-        options=name_options,
-        key='name_filter_select'
-    )
-    # 如果用户选择了具体的名称，就用它来过滤
-    if selected_name != "All":
-        df_stock = df_stock[df_stock['Warehouse Name'] == selected_name]
-        df_sales = df_sales[df_sales['Warehouse Name'] == selected_name]
-        df_posm = df_posm[df_posm['Warehouse Name'] == selected_name]
-        # 同样需要过滤用于DOS计算的df_sales_for_dos
-        df_sales_for_dos = df_sales_for_dos[df_sales_for_dos['Warehouse Name'] == selected_name]
-
-else: # filter_mode == "Filter by Warehouse Type"
-    # 显示按类型过滤的下拉框
-    selected_type = st.sidebar.selectbox(
-        "Select a Warehouse Type:",
-        options=type_options,
-        key='type_filter_select'
-    )
-    # 如果用户选择了具体的类型，就用它来过滤
-    if selected_type != "All":
-        df_stock = df_stock[df_stock['Warehouse Type'] == selected_type]
-        df_sales = df_sales[df_sales['Warehouse Type'] == selected_type]
-        
-        # 【核心修复】: 现在可以安全地过滤 df_posm 了
-        df_posm = df_posm[df_posm['Warehouse Type'] == selected_type] 
-        
-        df_sales_for_dos = df_sales_for_dos[df_sales_for_dos['Warehouse Type'] == selected_type]
 st.sidebar.divider()
 
 with st.sidebar.expander("📄 Export PDF Report", expanded=False):
@@ -917,12 +854,7 @@ with st.sidebar.expander("📥 Export Filtered Table", expanded=False):
 # --- 6. 主面板 ---
 st.title("SKG Business Analytics")
 
-# 2. 应用所有过滤器（日期和仓库）
-mask_curr = (
-    (df_sales['Date'] >= pd.to_datetime(date_range[0])) & 
-    (df_sales['Date'] <= pd.to_datetime(date_range[1]))
-)
-df_curr = df_sales[mask_curr].copy()
+# --- 不再需要仓库过滤，只保留日期过滤 ---
 
 tab1, tab2, tab3, tab4 = st.tabs(["📦 Stock Balance", "📈 Sales Analysis", "🛒 Purchase (DOS)", "🎁 POSM"])
 
@@ -1143,7 +1075,7 @@ with tab2:
     st.header("Sales Performance Analysis")
 
     # --- 2. 过滤主周期数据 ---
-    # 【修改】: 基于 df_sales 进行日期过滤
+    # 【修改】: 基于 df_sales 进行日期过滤（仅日期过滤，无仓库过滤）
     mask_curr = (
         (df_sales['Date'] >= pd.to_datetime(date_range[0])) & 
         (df_sales['Date'] <= pd.to_datetime(date_range[1]))
@@ -1244,7 +1176,11 @@ with tab2:
                 c_sales = df_comp_sidebar.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
                 
                 cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'AR Name'], how='outer').fillna(0)
-                cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
+                # 【修复 KeyError】: 检查列是否存在再进行计算
+                if p_label in cust_detail.columns and c_label in cust_detail.columns:
+                    cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
+                else:
+                    cust_detail['Diff'] = 0
                 cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
                 
                 st.dataframe(
