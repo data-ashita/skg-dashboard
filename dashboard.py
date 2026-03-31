@@ -1422,28 +1422,24 @@ with tab5:
                 
                 st.divider()
             
-            # --- 4. 广告周期信息 ---
-            if is_single_ad and not selected_ad_data.empty:
+            # ===== 如果是Selected Ad，显示Ad Campaign Period和KPI =====
+            if is_single_ad and selected_ad_data is not None and not selected_ad_data.empty:
+                # 显示广告活动周期
+                ad_start = selected_ad_data['starts'].min()
+                ad_end = selected_ad_data['ends'].max()
+                
                 st.subheader("📅 Ad Campaign Period")
-                
-                col_period1, col_period2 = st.columns(2)
-                
-                with col_period1:
-                    if 'starts' in selected_ad_data.columns:
-                        campaign_start = selected_ad_data['starts'].min()
-                        st.metric("Campaign Start Date", campaign_start.strftime('%Y-%m-%d') if pd.notna(campaign_start) else "N/A")
-                
-                with col_period2:
-                    if 'ends' in selected_ad_data.columns:
-                        campaign_end = selected_ad_data['ends'].max()
-                        st.metric("Campaign End Date", campaign_end.strftime('%Y-%m-%d') if pd.notna(campaign_end) else "N/A")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Campaign Start Date:** {ad_start.strftime('%Y-%m-%d') if pd.notna(ad_start) else 'N/A'}")
+                with col2:
+                    st.write(f"**Campaign End Date:** {ad_end.strftime('%Y-%m-%d') if pd.notna(ad_end) else 'N/A'}")
                 
                 st.divider()
                 
-                # ===== 【优化】如果是Selected Ad，在Ad Campaign Period下显示KPI Dashboard =====
+                # 显示Selected Ad的KPI
                 st.subheader("📊 Key Performance Indicators")
                 
-                # 计算选中广告的KPI（聚合daily数据）
                 total_spend = selected_ad_data['amount_spent'].sum() if 'amount_spent' in selected_ad_data.columns else 0
                 total_impressions = selected_ad_data['impressions'].sum() if 'impressions' in selected_ad_data.columns else 0
                 total_reach = selected_ad_data['reach'].sum() if 'reach' in selected_ad_data.columns else 0
@@ -1482,7 +1478,7 @@ with tab5:
                 
                 st.divider()
             
-            # ===== 【新增】TAB 1: AD PERFORMANCE RANKING WITH DAILY AVERAGE METRICS =====
+            # ===== AD PERFORMANCE RANKING WITH DAILY AVERAGE METRICS =====
             st.subheader("🏆 Ad Performance Ranking")
             
             if 'ad_name' in df_meta_ads_display.columns:
@@ -1508,6 +1504,7 @@ with tab5:
                 ad_summary['Daily Avg Spend'] = ad_summary['amount_spent'] / ad_summary['Days Running']
                 ad_summary['Daily Avg Impressions'] = ad_summary['impressions'] / ad_summary['Days Running']
                 ad_summary['Daily Avg Clicks'] = ad_summary['link_clicks'] / ad_summary['Days Running']
+                ad_summary['Daily Avg Landing Pages'] = ad_summary['website_landing_page_views'] / ad_summary['Days Running']
                 
                 # 按Total Spend排序
                 ad_summary = ad_summary.sort_values('amount_spent', ascending=False).reset_index(drop=True)
@@ -1522,12 +1519,17 @@ with tab5:
                     'Rank Mark', 'ad_name', 'Days Running',
                     'Daily Avg Spend', 'amount_spent',
                     'Daily Avg Impressions', 'impressions',
+                    'Daily Avg Clicks', 'link_clicks',
+                    'Daily Avg Landing Pages', 'website_landing_page_views',
                     'cpm', 'cpc', 'ctr'
                 ]].copy()
                 
                 display_df.columns = [
                     'Rank', 'Ad Name', 'Days', 'Daily Avg Spend', 'Total Spend',
-                    'Daily Avg Impressions', 'Total Impressions', 'Avg CPM', 'Avg CPC', 'Avg CTR'
+                    'Daily Avg Impressions', 'Total Impressions', 
+                    'Daily Avg Clicks', 'Total Clicks',
+                    'Daily Avg Landing Pages', 'Total Landing Pages',
+                    'Avg CPM', 'Avg CPC', 'Avg CTR'
                 ]
                 
                 # 格式化数值
@@ -1535,6 +1537,10 @@ with tab5:
                 display_df['Total Spend'] = display_df['Total Spend'].apply(lambda x: f"RM {x:,.2f}")
                 display_df['Daily Avg Impressions'] = display_df['Daily Avg Impressions'].apply(lambda x: f"{x:,.0f}")
                 display_df['Total Impressions'] = display_df['Total Impressions'].apply(lambda x: f"{x:,.0f}")
+                display_df['Daily Avg Clicks'] = display_df['Daily Avg Clicks'].apply(lambda x: f"{x:,.0f}")
+                display_df['Total Clicks'] = display_df['Total Clicks'].apply(lambda x: f"{x:,.0f}")
+                display_df['Daily Avg Landing Pages'] = display_df['Daily Avg Landing Pages'].apply(lambda x: f"{x:,.0f}")
+                display_df['Total Landing Pages'] = display_df['Total Landing Pages'].apply(lambda x: f"{x:,.0f}")
                 display_df['Avg CPM'] = display_df['Avg CPM'].apply(lambda x: f"RM {x:,.2f}")
                 display_df['Avg CPC'] = display_df['Avg CPC'].apply(lambda x: f"RM {x:,.2f}")
                 display_df['Avg CTR'] = display_df['Avg CTR'].apply(lambda x: f"{x:.2%}")
@@ -1543,12 +1549,12 @@ with tab5:
             
             st.divider()
             
-            # ===== 【新增】TAB 2: NORMALIZED PERFORMANCE TABLE =====
+            # ===== NORMALIZED PERFORMANCE TABLE =====
             st.subheader("💡 Normalized Performance - If Spending RM 100 per Ad")
             
             if 'ad_name' in df_meta_ads_display.columns:
                 # 计算规范化指标（假设花RM100）
-                normalized_data = df_meta_ads_display.groupby('ad_name').agg({
+                ad_summary_norm = df_meta_ads_display.groupby('ad_name').agg({
                     'amount_spent': 'sum',
                     'impressions': 'sum',
                     'reach': 'sum',
@@ -1561,34 +1567,32 @@ with tab5:
                     'video_plays': 'sum'
                 }).reset_index()
                 
-                # 计算规范化指标（基于RM100）
-                budget_baseline = 100
+                # 计算每RM100的指标
+                normalized_budget = 100
+                for metric in ['impressions', 'reach', 'link_clicks', 'website_landing_page_views', 
+                               'post_engagements', 'instagram_profile_visits', 'instagram_follows', 
+                               'facebook_likes', 'video_plays']:
+                    if metric in ad_summary_norm.columns:
+                        ad_summary_norm[f'{metric}_per_100'] = (ad_summary_norm[metric] / ad_summary_norm['amount_spent']) * normalized_budget
                 
-                normalized_data['Impressions per RM100'] = (normalized_data['impressions'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Reach per RM100'] = (normalized_data['reach'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Clicks per RM100'] = (normalized_data['link_clicks'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Landing Pages per RM100'] = (normalized_data['website_landing_page_views'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Engagements per RM100'] = (normalized_data['post_engagements'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['IG Visits per RM100'] = (normalized_data['instagram_profile_visits'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['IG Follows per RM100'] = (normalized_data['instagram_follows'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['FB Likes per RM100'] = (normalized_data['facebook_likes'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Video Plays per RM100'] = (normalized_data['video_plays'] / normalized_data['amount_spent'] * budget_baseline).round(0)
+                # 按impressions_per_100排序
+                ad_summary_norm = ad_summary_norm.sort_values('impressions_per_100', ascending=False).reset_index(drop=True)
                 
                 # 显示表格
-                normalized_display = normalized_data[[
+                norm_display = ad_summary_norm[[
                     'ad_name',
-                    'Impressions per RM100',
-                    'Reach per RM100',
-                    'Clicks per RM100',
-                    'Landing Pages per RM100',
-                    'Engagements per RM100',
-                    'IG Visits per RM100',
-                    'IG Follows per RM100',
-                    'FB Likes per RM100',
-                    'Video Plays per RM100'
+                    'impressions_per_100',
+                    'reach_per_100',
+                    'link_clicks_per_100',
+                    'website_landing_page_views_per_100',
+                    'post_engagements_per_100',
+                    'instagram_profile_visits_per_100',
+                    'instagram_follows_per_100',
+                    'facebook_likes_per_100',
+                    'video_plays_per_100'
                 ]].copy()
                 
-                normalized_display.columns = [
+                norm_display.columns = [
                     'Ad Name',
                     'Impressions',
                     'Reach',
@@ -1601,24 +1605,21 @@ with tab5:
                     'Video Plays'
                 ]
                 
-                # 排序（按impressions降序）
-                normalized_display = normalized_display.sort_values('Impressions', ascending=False).reset_index(drop=True)
+                # 格式化数值
+                for col in norm_display.columns[1:]:
+                    norm_display[col] = norm_display[col].apply(lambda x: f"{x:,.0f}")
                 
-                st.dataframe(normalized_display, use_container_width=True, hide_index=True)
+                st.dataframe(norm_display, use_container_width=True, hide_index=True)
                 
-                # 添加说明
-                st.info(
-                    "💡 **说明**：此表格显示如果每个广告都花费RM100，各个指标的预期表现。"
-                    "这样可以公平对比不同预算的广告。"
-                )
+                st.info("💡 **说明**：此表格显示如果每个广告都花费RM100，各项指标的预期值。帮助您对比不同预算下的广告效率。")
             
             st.divider()
             
-            # --- 6. 成本指标对比 ---
+            # ===== COST METRICS COMPARISON BY AD =====
             st.subheader("💰 Cost Metrics Comparison by Ad")
             
             if 'ad_name' in df_meta_ads_display.columns:
-                # 按广告分组计算成本指标
+                # 计算成本指标
                 cost_metrics = df_meta_ads_display.groupby('ad_name').agg({
                     'cpm': 'mean',
                     'cpc': 'mean',
@@ -1626,160 +1627,146 @@ with tab5:
                     'cost_per_post_engagement': 'mean'
                 }).reset_index()
                 
-                cost_metrics = cost_metrics.sort_values('cpm', ascending=True)
+                cost_metrics = cost_metrics.sort_values('cpm', ascending=True).reset_index(drop=True)
                 
-                # 计算平均值
-                avg_cpm = cost_metrics['cpm'].mean()
-                avg_cpc = cost_metrics['cpc'].mean()
-                avg_cplpv = cost_metrics['cost_per_landing_page_view'].mean()
-                avg_cpe = cost_metrics['cost_per_post_engagement'].mean()
-                
-                # 创建4个图表
+                # 创建两列布局
                 col1, col2 = st.columns(2)
                 
+                # 图表1：Average CPM by Ad
                 with col1:
-                    # Avg CPM
                     st.markdown("**Average CPM by Ad**")
-                    st.caption("⭐ 柱子越低 = 每1000次展示的成本越低 = 效率越高")
+                    st.caption("💡 **怎样看**: 柱子越低 = 每1000次展示的成本越低 = 效率越高")
+                    
+                    avg_cpm_all = cost_metrics['cpm'].mean()
                     fig_cpm = px.bar(
                         cost_metrics,
-                        x='ad_name',
-                        y='cpm',
-                        template='plotly_white',
-                        title='',
-                        labels={'cpm': 'CPM (RM)', 'ad_name': 'Ad Name'},
+                        x='cpm',
+                        y='ad_name',
+                        orientation='h',
                         color='cpm',
-                        color_continuous_scale='Teal'
+                        color_continuous_scale='Teal',
+                        text_auto='.2f'
                     )
-                    fig_cpm.add_hline(y=avg_cpm, line_dash="dash", line_color="red", annotation_text=f"Avg: RM {avg_cpm:.2f}")
+                    fig_cpm.add_vline(x=avg_cpm_all, line_dash="dash", line_color="red", annotation_text="Avg")
+                    fig_cpm.update_layout(height=400, yaxis_title=None, xaxis_title="CPM (RM)")
                     st.plotly_chart(fig_cpm, use_container_width=True)
                 
+                # 图表2：Average CPC by Ad
                 with col2:
-                    # Avg CPC
                     st.markdown("**Average CPC by Ad**")
-                    st.caption("⭐ 柱子越低 = 每次点击的成本越低 = 效率越高")
+                    st.caption("💡 **怎样看**: 柱子越低 = 每次点击的成本越低 = 效率越高")
+                    
+                    avg_cpc_all = cost_metrics['cpc'].mean()
                     fig_cpc = px.bar(
                         cost_metrics,
-                        x='ad_name',
-                        y='cpc',
-                        template='plotly_white',
-                        title='',
-                        labels={'cpc': 'CPC (RM)', 'ad_name': 'Ad Name'},
+                        x='cpc',
+                        y='ad_name',
+                        orientation='h',
                         color='cpc',
-                        color_continuous_scale='Teal'
+                        color_continuous_scale='Teal',
+                        text_auto='.2f'
                     )
-                    fig_cpc.add_hline(y=avg_cpc, line_dash="dash", line_color="red", annotation_text=f"Avg: RM {avg_cpc:.2f}")
+                    fig_cpc.add_vline(x=avg_cpc_all, line_dash="dash", line_color="red", annotation_text="Avg")
+                    fig_cpc.update_layout(height=400, yaxis_title=None, xaxis_title="CPC (RM)")
                     st.plotly_chart(fig_cpc, use_container_width=True)
                 
+                # 图表3：Average Cost per Landing Page by Ad
                 col3, col4 = st.columns(2)
                 
                 with col3:
-                    # Avg CPLPV
                     st.markdown("**Average Cost per Landing Page by Ad**")
-                    st.caption("⭐ 柱子越低 = 转化成本越低 = ROI越好")
+                    st.caption("💡 **怎样看**: 柱子越低 = 转化成本越低 = ROI越好")
+                    
+                    avg_cplpv_all = cost_metrics['cost_per_landing_page_view'].mean()
                     fig_cplpv = px.bar(
                         cost_metrics,
-                        x='ad_name',
-                        y='cost_per_landing_page_view',
-                        template='plotly_white',
-                        title='',
-                        labels={'cost_per_landing_page_view': 'Cost (RM)', 'ad_name': 'Ad Name'},
+                        x='cost_per_landing_page_view',
+                        y='ad_name',
+                        orientation='h',
                         color='cost_per_landing_page_view',
-                        color_continuous_scale='Teal'
+                        color_continuous_scale='Teal',
+                        text_auto='.2f'
                     )
-                    fig_cplpv.add_hline(y=avg_cplpv, line_dash="dash", line_color="red", annotation_text=f"Avg: RM {avg_cplpv:.2f}")
+                    fig_cplpv.add_vline(x=avg_cplpv_all, line_dash="dash", line_color="red", annotation_text="Avg")
+                    fig_cplpv.update_layout(height=400, yaxis_title=None, xaxis_title="Cost per Landing Page (RM)")
                     st.plotly_chart(fig_cplpv, use_container_width=True)
                 
+                # 图表4：Average Cost per Engagement by Ad
                 with col4:
-                    # Avg CPE
                     st.markdown("**Average Cost per Engagement by Ad**")
-                    st.caption("⭐ 柱子越低 = 每次互动的成本越低 = 效率越高")
+                    st.caption("💡 **怎样看**: 柱子越低 = 每次互动的成本越低 = 效率越高")
+                    
+                    avg_cpe_all = cost_metrics['cost_per_post_engagement'].mean()
                     fig_cpe = px.bar(
                         cost_metrics,
-                        x='ad_name',
-                        y='cost_per_post_engagement',
-                        template='plotly_white',
-                        title='',
-                        labels={'cost_per_post_engagement': 'Cost (RM)', 'ad_name': 'Ad Name'},
+                        x='cost_per_post_engagement',
+                        y='ad_name',
+                        orientation='h',
                         color='cost_per_post_engagement',
-                        color_continuous_scale='Teal'
+                        color_continuous_scale='Teal',
+                        text_auto='.2f'
                     )
-                    fig_cpe.add_hline(y=avg_cpe, line_dash="dash", line_color="red", annotation_text=f"Avg: RM {avg_cpe:.2f}")
+                    fig_cpe.add_vline(x=avg_cpe_all, line_dash="dash", line_color="red", annotation_text="Avg")
+                    fig_cpe.update_layout(height=400, yaxis_title=None, xaxis_title="Cost per Engagement (RM)")
                     st.plotly_chart(fig_cpe, use_container_width=True)
             
             st.divider()
             
-            # --- 7. Daily Trend Analysis ---
+            # ===== DAILY TREND ANALYSIS =====
             st.subheader("📈 Daily Trend Analysis")
             
             if is_single_ad and selected_ad_data is not None and not selected_ad_data.empty:
-                selected_data = selected_ad_data.copy()
-                
-                # 确保reporting_starts存在
-                if 'reporting_starts' in selected_data.columns:
-                    selected_data = selected_data.sort_values('reporting_starts')
+                # 按reporting_starts分组
+                if 'reporting_starts' in selected_ad_data.columns:
+                    trend_data = selected_ad_data.sort_values('reporting_starts').copy()
+                    trend_data['Day Number'] = range(1, len(trend_data) + 1)
+                    trend_data['Day Label'] = 'Day ' + trend_data['Day Number'].astype(str)
                     
-                    # 计算Day 1, 2, 3...
-                    min_date = selected_data['reporting_starts'].min()
-                    selected_data['Day Number'] = (selected_data['reporting_starts'] - min_date).dt.days + 1
-                    selected_data['Day Label'] = 'Day ' + selected_data['Day Number'].astype(str)
-                    
-                    # 创建两个图表
                     col1, col2 = st.columns(2)
                     
+                    # 左图：Daily Impressions & Reach Trend
                     with col1:
-                        # 展示和覆盖趋势
-                        if 'impressions' in selected_data.columns and 'reach' in selected_data.columns:
-                            # 准备数据
-                            trend_data = selected_data[['Day Label', 'impressions', 'reach']].copy()
-                            trend_data = trend_data.dropna(subset=['impressions', 'reach'])
-                            
-                            if not trend_data.empty:
-                                fig_spend = px.line(
-                                    trend_data,
-                                    x='Day Label',
-                                    y=['impressions', 'reach'],
-                                    markers=True,
-                                    template='plotly_white',
-                                    title='Daily Impressions & Reach Trend',
-                                    labels={'value': 'Value', 'variable': 'Metric'}
-                                )
-                                fig_spend.update_xaxes(type='category')
-                                st.plotly_chart(fig_spend, use_container_width=True)
-                            else:
-                                st.warning("No data available for Spend & Impressions trend")
+                        if 'impressions' in trend_data.columns and 'reach' in trend_data.columns:
+                            fig_trend1 = px.line(
+                                trend_data,
+                                x='Day Label',
+                                y=['impressions', 'reach'],
+                                title='Daily Impressions & Reach Trend',
+                                markers=True,
+                                color_discrete_sequence=['#008B8B', '#20B2AA']
+                            )
+                            fig_trend1.update_layout(height=400, hovermode='x unified')
+                            st.plotly_chart(fig_trend1, use_container_width=True)
                     
+                    # 右图：Daily Conversion Metrics Trend
                     with col2:
-                        # 转化指标趋势
-                        if 'link_clicks' in selected_data.columns and 'website_landing_page_views' in selected_data.columns:
-                            # 准备数据
-                            conversion_data = selected_data[['Day Label', 'link_clicks', 'website_landing_page_views', 'post_engagements']].copy()
-                            conversion_data = conversion_data.dropna(subset=['link_clicks', 'website_landing_page_views'])
-                            
-                            if not conversion_data.empty:
-                                fig_conversion = px.line(
-                                    conversion_data,
-                                    x='Day Label',
-                                    y=['link_clicks', 'website_landing_page_views', 'post_engagements'],
-                                    markers=True,
-                                    template='plotly_white',
-                                    title='Daily Conversion Metrics Trend',
-                                    labels={'value': 'Count', 'variable': 'Metric'}
-                                )
-                                fig_conversion.update_xaxes(type='category')
-                                st.plotly_chart(fig_conversion, use_container_width=True)
-                            else:
-                                st.warning("No data available for Conversion metrics trend")
-                else:
-                    st.warning("reporting_starts column not found in data")
+                        conversion_cols = []
+                        if 'link_clicks' in trend_data.columns:
+                            conversion_cols.append('link_clicks')
+                        if 'website_landing_page_views' in trend_data.columns:
+                            conversion_cols.append('website_landing_page_views')
+                        if 'post_engagements' in trend_data.columns:
+                            conversion_cols.append('post_engagements')
+                        
+                        if conversion_cols:
+                            fig_trend2 = px.line(
+                                trend_data,
+                                x='Day Label',
+                                y=conversion_cols,
+                                title='Daily Conversion Metrics Trend',
+                                markers=True,
+                                color_discrete_sequence=['#FF6B6B', '#4ECDC4', '#45B7D1']
+                            )
+                            fig_trend2.update_layout(height=400, hovermode='x unified')
+                            st.plotly_chart(fig_trend2, use_container_width=True)
             else:
-                st.info("💡 **提示**: 请在顶部选择一个具体的广告名称来查看Daily Trend Analysis。选择'All Ads'时不显示趋势图表。")
+                st.info("📌 请在上方选择一个具体的广告来查看Daily Trend Analysis。")
             
             st.divider()
             
-            # --- 7.5 Channel Performance (Instagram vs Facebook) ---
+            # ===== CHANNEL PERFORMANCE (INSTAGRAM VS FACEBOOK) =====
             st.subheader("📱 Channel Performance (Instagram vs Facebook)")
-
+            
             if 'ad_name' in df_meta_ads_display.columns:
                 # 按广告分组计算渠道指标
                 channel_metrics = df_meta_ads_display.groupby('ad_name').agg({
@@ -1806,194 +1793,158 @@ with tab5:
                 
                 st.dataframe(channel_metrics, use_container_width=True, hide_index=True)
                 
-                st.info(
-                    "💡 **说明**：此表格显示每个广告在Instagram和Facebook上的互动指标。"
-                    "可以帮助您了解不同渠道的表现差异。"
-                )
-
-            st.divider()
-
+                st.info("💡 **说明**：此表格显示每个广告在Instagram和Facebook上的互动指标。可以帮助您了解不同渠道的表现差异。")
             
-            # --- 8. ROI & Conversion Analysis ---
+            st.divider()
+            
+            # ===== ROI & CONVERSION ANALYSIS =====
             st.subheader("🎯 ROI & Conversion Analysis")
             
+            # 创建两个标签页
             roi_tab1, roi_tab2 = st.tabs(["Overall", "Ad Comparison"])
             
             with roi_tab1:
-                if 'amount_spent' in df_meta_ads_display.columns and 'website_landing_page_views' in df_meta_ads_display.columns:
-                    roi_metrics = pd.DataFrame({
-                        'Metric': [
-                            'Total Spend',
-                            'Landing Page Views',
-                            'Cost per Landing Page View',
-                            'Link Clicks',
-                            'Cost per Link Click',
-                            'Total Engagements',
-                            'Cost per Engagement'
-                        ],
-                        'Value': [
-                            f"RM {total_spend:,.2f}",
-                            f"{total_landing_page_views:,.0f}",
-                            f"RM {cost_per_landing_page:.2f}",
-                            f"{total_link_clicks:,.0f}",
-                            f"RM {total_spend/total_link_clicks:.2f}" if total_link_clicks > 0 else "N/A",
-                            f"{total_engagements:,.0f}",
-                            f"RM {cost_per_engagement:.2f}"
-                        ]
-                    })
-                    
-                    st.dataframe(roi_metrics, use_container_width=True, hide_index=True, height=300)
+                st.markdown("**Overall ROI & Conversion Metrics**")
+                
+                # 计算总体指标
+                roi_summary = df_meta_ads_display.groupby('ad_name').agg({
+                    'amount_spent': 'sum',
+                    'link_clicks': 'sum',
+                    'website_landing_page_views': 'sum',
+                    'post_engagements': 'sum',
+                    'cost_per_landing_page_view': 'mean',
+                    'cost_per_post_engagement': 'mean',
+                    'cpc': 'mean'
+                }).reset_index()
+                
+                roi_summary = roi_summary.sort_values('amount_spent', ascending=False).reset_index(drop=True)
+                
+                # 显示表格
+                roi_display = roi_summary[[
+                    'ad_name', 'amount_spent', 'link_clicks', 'website_landing_page_views',
+                    'post_engagements', 'cpc', 'cost_per_landing_page_view', 'cost_per_post_engagement'
+                ]].copy()
+                
+                roi_display.columns = [
+                    'Ad Name', 'Total Spend', 'Link Clicks', 'Landing Pages',
+                    'Engagements', 'Cost per Click', 'Cost per Landing Page', 'Cost per Engagement'
+                ]
+                
+                # 格式化
+                roi_display['Total Spend'] = roi_display['Total Spend'].apply(lambda x: f"RM {x:,.2f}")
+                roi_display['Link Clicks'] = roi_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                roi_display['Landing Pages'] = roi_display['Landing Pages'].apply(lambda x: f"{x:,.0f}")
+                roi_display['Engagements'] = roi_display['Engagements'].apply(lambda x: f"{x:,.0f}")
+                roi_display['Cost per Click'] = roi_display['Cost per Click'].apply(lambda x: f"RM {x:,.2f}")
+                roi_display['Cost per Landing Page'] = roi_display['Cost per Landing Page'].apply(lambda x: f"RM {x:,.2f}")
+                roi_display['Cost per Engagement'] = roi_display['Cost per Engagement'].apply(lambda x: f"RM {x:,.2f}")
+                
+                st.dataframe(roi_display, use_container_width=True, hide_index=True)
             
             with roi_tab2:
-                st.markdown("**ROI & Conversion by Ad Name**")
+                st.markdown("**Ad Comparison - ROI & Conversion Metrics**")
                 
-                if 'ad_name' in df_meta_ads_display.columns:
-                    # 按ad_name汇总ROI数据
-                    roi_by_ad = df_meta_ads_display.groupby('ad_name').agg({
-                        'amount_spent': 'sum',
-                        'link_clicks': 'sum',
-                        'website_landing_page_views': 'sum',
-                        'post_engagements': 'sum',
-                        'cpc': 'mean',
-                        'cost_per_landing_page_view': 'mean',
-                        'cost_per_post_engagement': 'mean',
-                        'cpm': 'mean'
-                    }).reset_index()
-                    
-                    roi_by_ad.columns = [
-                        'Ad Name', 'Total Spend', 'Link Clicks', 'Landing Page Views',
-                        'Engagements', 'Cost per Click', 'Cost per Landing Page',
-                        'Cost per Engagement', 'Avg CPM'
-                    ]
-                    
-                    st.dataframe(roi_by_ad, use_container_width=True, hide_index=True, height=300)
-                    
-                    st.divider()
-                    
-                    # --- 自由选择轴的对比Line Chart ---
-                    st.markdown("**Custom Comparison Line Chart**")
-                    
-                    # 可用的指标列表
-                    available_metrics = ['Total Spend', 'Link Clicks', 'Landing Page Views', 'Engagements', 
-                                        'Cost per Click', 'Cost per Landing Page', 'Cost per Engagement', 'Avg CPM']
-                    
-                    col_select1, col_select2 = st.columns(2)
-                    
-                    with col_select1:
-                        selected_x_metric = st.selectbox(
-                            "Select X-Axis Metric:",
-                            options=available_metrics,
-                            index=0,
-                            key='roi_x_axis'
-                        )
-                    
-                    with col_select2:
-                        selected_y_metric = st.selectbox(
-                            "Select Y-Axis Metric:",
-                            options=available_metrics,
-                            index=4,  # 默认选择Cost per Click
-                            key='roi_y_axis'
-                        )
-                    
-                    # 创建自定义line chart
-                    if selected_x_metric and selected_y_metric:
-                        # 准备数据
-                        chart_data = roi_by_ad[['Ad Name', selected_x_metric, selected_y_metric]].copy()
-                        chart_data = chart_data.sort_values(selected_x_metric)
-                        
-                        # 创建line chart
-                        fig_custom = px.line(
-                            chart_data,
-                            x=selected_x_metric,
-                            y=selected_y_metric,
-                            markers=True,
-                            template='plotly_white',
-                            title=f'{selected_y_metric} vs {selected_x_metric}',
-                            labels={selected_x_metric: selected_x_metric, selected_y_metric: selected_y_metric},
-                            hover_data={'Ad Name': True}
-                        )
-                        
-                        # 添加平均值线
-                        avg_y = chart_data[selected_y_metric].mean()
-                        fig_custom.add_hline(
-                            y=avg_y,
-                            line_dash="dash",
-                            line_color="red",
-                            annotation_text=f"Average: {avg_y:.2f}",
-                            annotation_position="right"
-                        )
-                        
-                        # 标记每个点的广告名称
-                        fig_custom.update_traces(
-                            text=chart_data['Ad Name'],
-                            textposition="top center",
-                            mode='lines+markers+text'
-                        )
-                        
-                        fig_custom.update_traces(line_width=2, marker_size=8)
-                        
-                        st.plotly_chart(fig_custom, use_container_width=True)
-                        
-                        # 显示统计信息
-                        col_stat1, col_stat2, col_stat3 = st.columns(3)
-                        
-                        with col_stat1:
-                            st.metric(
-                                f"Average {selected_y_metric}",
-                                f"{avg_y:.2f}" if isinstance(avg_y, (int, float)) else avg_y
-                            )
-                        
-                        with col_stat2:
-                            min_val = chart_data[selected_y_metric].min()
-                            min_ad = chart_data[chart_data[selected_y_metric] == min_val]['Ad Name'].values[0]
-                            st.metric(
-                                f"Lowest {selected_y_metric}",
-                                f"{min_val:.2f}" if isinstance(min_val, (int, float)) else min_val,
-                                f"({min_ad})"
-                            )
-                        
-                        with col_stat3:
-                            max_val = chart_data[selected_y_metric].max()
-                            max_ad = chart_data[chart_data[selected_y_metric] == max_val]['Ad Name'].values[0]
-                            st.metric(
-                                f"Highest {selected_y_metric}",
-                                f"{max_val:.2f}" if isinstance(max_val, (int, float)) else max_val,
-                                f"({max_ad})"
-                            )
-            st.divider()
-            
-            # --- 成本对比图表 ---
-            if is_single_ad:
-                st.subheader("💰 Cost Comparison - Selected Ad vs Others")
+                # 计算对比指标
+                comparison_summary = df_meta_ads_display.groupby('ad_name').agg({
+                    'amount_spent': 'sum',
+                    'link_clicks': 'sum',
+                    'website_landing_page_views': 'sum',
+                    'post_engagements': 'sum',
+                    'cpc': 'mean',
+                    'cost_per_landing_page_view': 'mean',
+                    'cost_per_post_engagement': 'mean'
+                }).reset_index()
                 
-                # 准备对比数据
-                cost_comparison = pd.DataFrame({
-                    'Metric': ['Avg CPM', 'Avg CPC', 'Avg CPLPV', 'Avg Cost/Engagement'],
-                    selected_ad: [
-                        avg_cpm,
-                        avg_cpc,
-                        cost_per_landing_page,
-                        cost_per_engagement
-                    ]
-                })
+                comparison_summary = comparison_summary.sort_values('amount_spent', ascending=False).reset_index(drop=True)
                 
-                other_ads_data = df_meta_ads_filtered[df_meta_ads_filtered['ad_name'] != selected_ad].copy()
-                if not other_ads_data.empty:
-                    cost_comparison['Other Ads Avg'] = [
-                        other_ads_data['cpm'].mean() if 'cpm' in other_ads_data.columns else 0,
-                        other_ads_data['cpc'].mean() if 'cpc' in other_ads_data.columns else 0,
-                        other_ads_data['cost_per_landing_page_view'].mean() if 'cost_per_landing_page_view' in other_ads_data.columns else 0,
-                        other_ads_data['cost_per_post_engagement'].mean() if 'cost_per_post_engagement' in other_ads_data.columns else 0
-                    ]
-                    
-                    # 创建对比图表
-                    fig_cost = px.bar(
-                        cost_comparison,
-                        x='Metric',
-                        y=[selected_ad, 'Other Ads Avg'],
-                        barmode='group',
-                        template='plotly_white',
-                        title=f'Cost Metrics: {selected_ad} vs Other Ads',
-                        labels={'value': 'Cost (RM)', 'variable': 'Ad Group'}
+                # 显示表格
+                comp_display = comparison_summary[[
+                    'ad_name', 'amount_spent', 'link_clicks', 'website_landing_page_views',
+                    'post_engagements', 'cpc', 'cost_per_landing_page_view', 'cost_per_post_engagement'
+                ]].copy()
+                
+                comp_display.columns = [
+                    'Ad Name', 'Total Spend', 'Link Clicks', 'Landing Pages',
+                    'Engagements', 'Cost per Click', 'Cost per Landing Page', 'Cost per Engagement'
+                ]
+                
+                # 格式化
+                comp_display['Total Spend'] = comp_display['Total Spend'].apply(lambda x: f"RM {x:,.2f}")
+                comp_display['Link Clicks'] = comp_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                comp_display['Landing Pages'] = comp_display['Landing Pages'].apply(lambda x: f"{x:,.0f}")
+                comp_display['Engagements'] = comp_display['Engagements'].apply(lambda x: f"{x:,.0f}")
+                comp_display['Cost per Click'] = comp_display['Cost per Click'].apply(lambda x: f"RM {x:,.2f}")
+                comp_display['Cost per Landing Page'] = comp_display['Cost per Landing Page'].apply(lambda x: f"RM {x:,.2f}")
+                comp_display['Cost per Engagement'] = comp_display['Cost per Engagement'].apply(lambda x: f"RM {x:,.2f}")
+                
+                st.dataframe(comp_display, use_container_width=True, hide_index=True)
+                
+                # Custom Comparison Line Chart
+                st.markdown("**Custom Comparison Line Chart**")
+                
+                # 选择X和Y轴
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    x_metric = st.selectbox(
+                        "Select X-Axis Metric:",
+                        options=['Total Spend', 'Link Clicks', 'Landing Pages', 'Engagements',
+                                'Cost per Click', 'Cost per Landing Page', 'Cost per Engagement'],
+                        index=0
                     )
-                    st.plotly_chart(fig_cost, use_container_width=True)
+                
+                with col2:
+                    y_metric = st.selectbox(
+                        "Select Y-Axis Metric:",
+                        options=['Total Spend', 'Link Clicks', 'Landing Pages', 'Engagements',
+                                'Cost per Click', 'Cost per Landing Page', 'Cost per Engagement'],
+                        index=2
+                    )
+                
+                # 映射显示名称到列名
+                metric_mapping = {
+                    'Total Spend': 'amount_spent',
+                    'Link Clicks': 'link_clicks',
+                    'Landing Pages': 'website_landing_page_views',
+                    'Engagements': 'post_engagements',
+                    'Cost per Click': 'cpc',
+                    'Cost per Landing Page': 'cost_per_landing_page_view',
+                    'Cost per Engagement': 'cost_per_post_engagement'
+                }
+                
+                x_col = metric_mapping[x_metric]
+                y_col = metric_mapping[y_metric]
+                
+                # 创建Line Chart
+                fig_custom = px.scatter(
+                    comparison_summary,
+                    x=x_col,
+                    y=y_col,
+                    hover_data=['ad_name'],
+                    title=f'{y_metric} vs {x_metric}',
+                    labels={'ad_name': 'Ad Name', x_col: x_metric, y_col: y_metric}
+                )
+                
+                # 添加平均值线
+                y_avg = comparison_summary[y_col].mean()
+                fig_custom.add_hline(y=y_avg, line_dash="dash", line_color="red", annotation_text="Average")
+                
+                fig_custom.update_layout(height=500, hovermode='closest')
+                st.plotly_chart(fig_custom, use_container_width=True)
+                
+                # 显示统计信息
+                st.markdown("**Statistics**")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Average Y Metric", f"{comparison_summary[y_col].mean():,.2f}")
+                
+                with col2:
+                    min_idx = comparison_summary[y_col].idxmin()
+                    st.metric("Lowest Y Metric", f"{comparison_summary[y_col].min():,.2f}", 
+                             delta=f"({comparison_summary.loc[min_idx, 'ad_name']})")
+                
+                with col3:
+                    max_idx = comparison_summary[y_col].idxmax()
+                    st.metric("Highest Y Metric", f"{comparison_summary[y_col].max():,.2f}",
+                             delta=f"({comparison_summary.loc[max_idx, 'ad_name']})")
