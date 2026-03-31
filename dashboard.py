@@ -1823,7 +1823,196 @@ with tab5:
 
             st.divider()
 
+            # --- 7.5 FREQUENCY ANALYSIS ---
+            st.subheader("📊 Frequency Analysis")
             
+            if 'frequency' in df_meta_ads_display.columns and 'ad_name' in df_meta_ads_display.columns:
+                # 计算每个广告的平均Frequency
+                frequency_analysis = df_meta_ads_display.groupby('ad_name').agg({
+                    'frequency': 'mean',
+                    'ctr': 'mean',
+                    'website_landing_page_views': 'sum',
+                    'link_clicks': 'sum',
+                    'impressions': 'sum',
+                    'reach': 'sum',
+                    'cpm': 'mean'
+                }).reset_index()
+                
+                # 计算转化率
+                frequency_analysis['Conversion Rate'] = (
+                    frequency_analysis['website_landing_page_views'] / frequency_analysis['impressions'] * 100
+                ).fillna(0)
+                
+                # 计算CTR百分比
+                frequency_analysis['CTR %'] = frequency_analysis['ctr'] * 100
+                
+                # 添加状态标记
+                def get_frequency_status(freq):
+                    if freq < 2:
+                        return "⚠️ 过低"
+                    elif freq <= 3:
+                        return "✓ 理想"
+                    elif freq <= 5:
+                        return "⚠️ 适中"
+                    else:
+                        return "❌ 过高"
+                
+                frequency_analysis['Status'] = frequency_analysis['frequency'].apply(get_frequency_status)
+                
+                # 按Frequency排序
+                frequency_analysis = frequency_analysis.sort_values('frequency', ascending=False).reset_index(drop=True)
+                
+                # 创建两列布局
+                col1, col2 = st.columns(2)
+                
+                # 左列：Frequency指标卡片
+                with col1:
+                    st.markdown("**Frequency Metrics**")
+                    
+                    avg_frequency = frequency_analysis['frequency'].mean()
+                    max_frequency = frequency_analysis['frequency'].max()
+                    min_frequency = frequency_analysis['frequency'].min()
+                    
+                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                    
+                    with metric_col1:
+                        st.metric("Avg Frequency", f"{avg_frequency:.2f}")
+                    
+                    with metric_col2:
+                        st.metric("Max Frequency", f"{max_frequency:.2f}")
+                    
+                    with metric_col3:
+                        st.metric("Min Frequency", f"{min_frequency:.2f}")
+                
+                # 右列：超出范围的广告数量
+                with col2:
+                    st.markdown("**Status Summary**")
+                    
+                    ideal_count = len(frequency_analysis[frequency_analysis['Status'] == "✓ 理想"])
+                    high_count = len(frequency_analysis[frequency_analysis['Status'] == "❌ 过高"])
+                    low_count = len(frequency_analysis[frequency_analysis['Status'] == "⚠️ 过低"])
+                    
+                    summary_col1, summary_col2, summary_col3 = st.columns(3)
+                    
+                    with summary_col1:
+                        st.metric("理想范围", ideal_count)
+                    
+                    with summary_col2:
+                        st.metric("过高", high_count)
+                    
+                    with summary_col3:
+                        st.metric("过低", low_count)
+                
+                st.divider()
+                
+                # Frequency分析表格
+                st.markdown("**Frequency Analysis by Ad**")
+                
+                display_freq = frequency_analysis[[
+                    'ad_name', 'Status', 'frequency', 'reach', 'impressions',
+                    'CTR %', 'Conversion Rate', 'cpm', 'link_clicks'
+                ]].copy()
+                
+                display_freq.columns = [
+                    'Ad Name', 'Status', 'Avg Frequency', 'Reach', 'Impressions',
+                    'CTR %', 'Conversion Rate %', 'Avg CPM', 'Link Clicks'
+                ]
+                
+                # 格式化数值
+                display_freq['Avg Frequency'] = display_freq['Avg Frequency'].apply(lambda x: f"{x:.2f}")
+                display_freq['Reach'] = display_freq['Reach'].apply(lambda x: f"{x:,.0f}")
+                display_freq['Impressions'] = display_freq['Impressions'].apply(lambda x: f"{x:,.0f}")
+                display_freq['CTR %'] = display_freq['CTR %'].apply(lambda x: f"{x:.2f}%")
+                display_freq['Conversion Rate %'] = display_freq['Conversion Rate %'].apply(lambda x: f"{x:.2f}%")
+                display_freq['Avg CPM'] = display_freq['Avg CPM'].apply(lambda x: f"RM {x:,.2f}")
+                display_freq['Link Clicks'] = display_freq['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                
+                st.dataframe(display_freq, use_container_width=True, hide_index=True)
+                
+                st.info(
+                    "💡 **说明**：\n"
+                    "- **理想范围**: Frequency 2-3 时，CTR和转化率最高\n"
+                    "- **过低**: Frequency < 2 时，需要增加预算或投放时间\n"
+                    "- **过高**: Frequency > 5 时，可能出现受众疲劳，需要减少预算或更换创意"
+                )
+                
+                st.divider()
+                
+                # Frequency vs CTR 散点图
+                st.markdown("**Frequency vs CTR Analysis**")
+                
+                fig_freq_ctr = px.scatter(
+                    frequency_analysis,
+                    x='frequency',
+                    y='CTR %',
+                    size='reach',
+                    color='frequency',
+                    hover_data=['ad_name', 'Conversion Rate'],
+                    color_continuous_scale='Teal',
+                    title='Frequency vs CTR (bubble size = Reach)',
+                    labels={'frequency': 'Average Frequency', 'CTR %': 'CTR %'}
+                )
+                
+                # 添加理想范围线
+                fig_freq_ctr.add_vline(x=2, line_dash="dash", line_color="green", annotation_text="Min Ideal")
+                fig_freq_ctr.add_vline(x=3, line_dash="dash", line_color="green", annotation_text="Max Ideal")
+                fig_freq_ctr.add_vline(x=5, line_dash="dash", line_color="red", annotation_text="Warning")
+                
+                fig_freq_ctr.update_layout(height=500, hovermode='closest')
+                st.plotly_chart(fig_freq_ctr, use_container_width=True)
+                
+                st.divider()
+                
+                # Frequency vs Conversion Rate 散点图
+                st.markdown("**Frequency vs Conversion Rate Analysis**")
+                
+                fig_freq_conv = px.scatter(
+                    frequency_analysis,
+                    x='frequency',
+                    y='Conversion Rate',
+                    size='impressions',
+                    color='frequency',
+                    hover_data=['ad_name', 'CTR %'],
+                    color_continuous_scale='Teal',
+                    title='Frequency vs Conversion Rate (bubble size = Impressions)',
+                    labels={'frequency': 'Average Frequency', 'Conversion Rate': 'Conversion Rate %'}
+                )
+                
+                # 添加理想范围线
+                fig_freq_conv.add_vline(x=2, line_dash="dash", line_color="green", annotation_text="Min Ideal")
+                fig_freq_conv.add_vline(x=3, line_dash="dash", line_color="green", annotation_text="Max Ideal")
+                fig_freq_conv.add_vline(x=5, line_dash="dash", line_color="red", annotation_text="Warning")
+                
+                fig_freq_conv.update_layout(height=500, hovermode='closest')
+                st.plotly_chart(fig_freq_conv, use_container_width=True)
+                
+                st.divider()
+                
+                # Frequency vs CPM 散点图
+                st.markdown("**Frequency vs CPM Analysis**")
+                
+                fig_freq_cpm = px.scatter(
+                    frequency_analysis,
+                    x='frequency',
+                    y='cpm',
+                    size='reach',
+                    color='frequency',
+                    hover_data=['ad_name', 'CTR %'],
+                    color_continuous_scale='Teal',
+                    title='Frequency vs CPM (bubble size = Reach)',
+                    labels={'frequency': 'Average Frequency', 'cpm': 'Average CPM (RM)'}
+                )
+                
+                # 添加理想范围线
+                fig_freq_cpm.add_vline(x=2, line_dash="dash", line_color="green", annotation_text="Min Ideal")
+                fig_freq_cpm.add_vline(x=3, line_dash="dash", line_color="green", annotation_text="Max Ideal")
+                fig_freq_cpm.add_vline(x=5, line_dash="dash", line_color="red", annotation_text="Warning")
+                
+                fig_freq_cpm.update_layout(height=500, hovermode='closest')
+                st.plotly_chart(fig_freq_cpm, use_container_width=True)
+            
+            st.divider()
+
             # --- 8. ROI & Conversion Analysis ---
             st.subheader("🎯 ROI & Conversion Analysis")
             
