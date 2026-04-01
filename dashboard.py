@@ -1554,73 +1554,283 @@ with tab5:
             st.divider()
             
             # ===== 【新增】TAB 2: NORMALIZED PERFORMANCE TABLE =====
-            st.subheader("💡 Normalized Performance - If Spending RM 100 per Ad")
-            
-            if 'ad_name' in df_meta_ads_display.columns:
-                # 计算规范化指标（假设花RM100）
-                normalized_data = df_meta_ads_display.groupby('ad_name').agg({
-                    'amount_spent': 'sum',
-                    'impressions': 'sum',
-                    'reach': 'sum',
-                    'link_clicks': 'sum',
-                    'website_landing_page_views': 'sum',
-                    'post_engagements': 'sum',
-                    'instagram_profile_visits': 'sum',
-                    'instagram_follows': 'sum',
-                    'facebook_likes': 'sum',
-                    'video_plays': 'sum'
-                }).reset_index()
+            st.subheader("📊 Campaign Stage Analysis - By RM100 Spend")
+            st.caption("按广告生命周期阶段对比表现，消除开始日期和花费差异")
+
+            if 'ad_name' in df_meta_ads_display.columns and 'starts' in df_meta_ads_display.columns:
+                # 计算每个广告的Campaign运行天数
+                df_meta_ads_display['days_running'] = (
+                    pd.to_datetime(df_meta_ads_display['reporting_starts']) - 
+                    pd.to_datetime(df_meta_ads_display['starts'])
+                ).dt.days + 1
                 
-                # 计算规范化指标（基于RM100）
-                budget_baseline = 100
+                # 定义Campaign阶段
+                def get_campaign_stage(days_running):
+                    if days_running <= 7:
+                        return 'Initial (Day 1-7)'
+                    elif days_running <= 14:
+                        return 'Middle (Day 8-14)'
+                    else:
+                        return 'Late (Day 15+)'
                 
-                normalized_data['Impressions per RM100'] = (normalized_data['impressions'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Reach per RM100'] = (normalized_data['reach'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Clicks per RM100'] = (normalized_data['link_clicks'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Landing Pages per RM100'] = (normalized_data['website_landing_page_views'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Engagements per RM100'] = (normalized_data['post_engagements'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['IG Visits per RM100'] = (normalized_data['instagram_profile_visits'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['IG Follows per RM100'] = (normalized_data['instagram_follows'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['FB Likes per RM100'] = (normalized_data['facebook_likes'] / normalized_data['amount_spent'] * budget_baseline).round(0)
-                normalized_data['Video Plays per RM100'] = (normalized_data['video_plays'] / normalized_data['amount_spent'] * budget_baseline).round(0)
+                df_meta_ads_display['campaign_stage'] = df_meta_ads_display['days_running'].apply(get_campaign_stage)
                 
-                # 显示表格
-                normalized_display = normalized_data[[
-                    'ad_name',
-                    'Impressions per RM100',
-                    'Reach per RM100',
-                    'Clicks per RM100',
-                    'Landing Pages per RM100',
-                    'Engagements per RM100',
-                    'IG Visits per RM100',
-                    'IG Follows per RM100',
-                    'FB Likes per RM100',
-                    'Video Plays per RM100'
-                ]].copy()
+                # 创建三个标签页
+                tab_initial, tab_middle, tab_late = st.tabs(['Initial (Day 1-7)', 'Middle (Day 8-14)', 'Late (Day 15+)'])
                 
-                normalized_display.columns = [
-                    'Ad Name',
-                    'Impressions',
-                    'Reach',
-                    'Clicks',
-                    'Landing Pages',
-                    'Engagements',
-                    'IG Visits',
-                    'IG Follows',
-                    'FB Likes',
-                    'Video Plays'
-                ]
+                # 处理每个阶段
+                stages = ['Initial (Day 1-7)', 'Middle (Day 8-14)', 'Late (Day 15+)']
+                tabs = [tab_initial, tab_middle, tab_late]
                 
-                # 排序（按impressions降序）
-                normalized_display = normalized_display.sort_values('Impressions', ascending=False).reset_index(drop=True)
+                for stage, tab in zip(stages, tabs):
+                    with tab:
+                        # 过滤该阶段的数据
+                        stage_data = df_meta_ads_display[df_meta_ads_display['campaign_stage'] == stage]
+                        
+                        if len(stage_data) > 0:
+                            # 按广告名称分组并聚合
+                            stage_agg = stage_data.groupby('ad_name').agg({
+                                'amount_spent': 'sum',
+                                'impressions': 'sum',
+                                'reach': 'sum',
+                                'link_clicks': 'sum',
+                                'website_landing_page_views': 'sum',
+                                'post_engagements': 'sum',
+                                'ctr': 'mean',
+                                'cpc': 'mean',
+                                'cpm': 'mean',
+                                'instagram_profile_visits': 'sum',
+                                'instagram_follows': 'sum',
+                                'facebook_likes': 'sum',
+                                'video_plays': 'sum'
+                            }).reset_index()
+                            
+                            # 计算RM100规范化指标
+                            budget_baseline = 100
+                            
+                            stage_agg['Impressions per RM100'] = (
+                                stage_agg['impressions'] / stage_agg['amount_spent'] * budget_baseline
+                            ).round(0)
+                            stage_agg['Reach per RM100'] = (
+                                stage_agg['reach'] / stage_agg['amount_spent'] * budget_baseline
+                            ).round(0)
+                            stage_agg['Clicks per RM100'] = (
+                                stage_agg['link_clicks'] / stage_agg['amount_spent'] * budget_baseline
+                            ).round(0)
+                            stage_agg['Landing Pages per RM100'] = (
+                                stage_agg['website_landing_page_views'] / stage_agg['amount_spent'] * budget_baseline
+                            ).round(0)
+                            stage_agg['Engagements per RM100'] = (
+                                stage_agg['post_engagements'] / stage_agg['amount_spent'] * budget_baseline
+                            ).round(0)
+                            
+                            # 显示关键指标卡片
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                avg_ctr = stage_agg['ctr'].mean()
+                                st.metric("Avg CTR %", f"{avg_ctr:.2f}%")
+                            
+                            with col2:
+                                avg_cpc = stage_agg['cpc'].mean()
+                                st.metric("Avg CPC", f"RM {avg_cpc:.2f}")
+                            
+                            with col3:
+                                avg_cpm = stage_agg['cpm'].mean()
+                                st.metric("Avg CPM", f"RM {avg_cpm:.2f}")
+                            
+                            with col4:
+                                total_spend = stage_agg['amount_spent'].sum()
+                                st.metric("Total Spend", f"RM {total_spend:,.0f}")
+                            
+                            st.divider()
+                            
+                            # 显示表格
+                            stage_display = stage_agg[[
+                                'ad_name',
+                                'amount_spent',
+                                'Impressions per RM100',
+                                'Reach per RM100',
+                                'Clicks per RM100',
+                                'Landing Pages per RM100',
+                                'Engagements per RM100',
+                                'ctr',
+                                'cpc',
+                                'cpm'
+                            ]].copy()
+                            
+                            stage_display.columns = [
+                                'Ad Name',
+                                'Total Spend (RM)',
+                                'Impressions/RM100',
+                                'Reach/RM100',
+                                'Clicks/RM100',
+                                'Landing Pages/RM100',
+                                'Engagements/RM100',
+                                'CTR %',
+                                'CPC (RM)',
+                                'CPM (RM)'
+                            ]
+                            
+                            # 格式化显示
+                            stage_display['Total Spend (RM)'] = stage_display['Total Spend (RM)'].apply(lambda x: f"RM {x:,.0f}")
+                            stage_display['CTR %'] = stage_display['CTR %'].apply(lambda x: f"{x:.2f}%")
+                            stage_display['CPC (RM)'] = stage_display['CPC (RM)'].apply(lambda x: f"RM {x:.2f}")
+                            stage_display['CPM (RM)'] = stage_display['CPM (RM)'].apply(lambda x: f"RM {x:.2f}")
+                            
+                            # 按Impressions/RM100排序
+                            stage_display = stage_display.sort_values('Impressions/RM100', ascending=False, key=lambda x: x.str.replace(',', '').astype(float) if x.dtype == 'object' else x).reset_index(drop=True)
+                            
+                            st.dataframe(stage_display, use_container_width=True, hide_index=True)
+                            
+                            # 图表对比
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                # CTR对比
+                                fig_ctr = go.Figure()
+                                fig_ctr.add_trace(go.Bar(
+                                    x=stage_agg['ad_name'],
+                                    y=stage_agg['ctr'],
+                                    marker=dict(color=stage_agg['ctr'], colorscale='Teal', showscale=False),
+                                    name='CTR %'
+                                ))
+                                fig_ctr.update_layout(
+                                    title=f'CTR Comparison - {stage}',
+                                    xaxis_title='Ad Name',
+                                    yaxis_title='CTR %',
+                                    height=400,
+                                    showlegend=False
+                                )
+                                st.plotly_chart(fig_ctr, use_container_width=True)
+                            
+                            with col2:
+                                # CPC对比
+                                fig_cpc = go.Figure()
+                                fig_cpc.add_trace(go.Bar(
+                                    x=stage_agg['ad_name'],
+                                    y=stage_agg['cpc'],
+                                    marker=dict(color=stage_agg['cpc'], colorscale='Teal', showscale=False),
+                                    name='CPC'
+                                ))
+                                fig_cpc.update_layout(
+                                    title=f'CPC Comparison - {stage}',
+                                    xaxis_title='Ad Name',
+                                    yaxis_title='CPC (RM)',
+                                    height=400,
+                                    showlegend=False
+                                )
+                                st.plotly_chart(fig_cpc, use_container_width=True)
+                            
+                            # 说明
+                            st.info(
+                                f"💡 **说明**：此表格显示{stage}阶段的广告表现。"
+                                "**Impressions/RM100** 表示如果花费RM100，预期获得的展示数。"
+                                "这样可以公平对比不同开始日期和不同花费的广告在相同生命周期阶段的表现。"
+                            )
+                        else:
+                            st.warning(f"此阶段没有数据")
                 
-                st.dataframe(normalized_display, use_container_width=True, hide_index=True)
+                st.divider()
                 
-                # 添加说明
-                st.info(
-                    "💡 **说明**：此表格显示如果每个广告都花费RM100，各个指标的预期表现。"
-                    "这样可以公平对比不同预算的广告。"
-                )
+                # 受众疲劳速度对比
+                st.subheader("📉 Audience Fatigue Analysis")
+                st.caption("对比广告的受众疲劳速度（初期 vs 后期的表现下降）")
+                
+                # 计算初期和后期的平均指标
+                initial_stage = df_meta_ads_display[df_meta_ads_display['campaign_stage'] == 'Initial (Day 1-7)']
+                late_stage = df_meta_ads_display[df_meta_ads_display['campaign_stage'] == 'Late (Day 15+)']
+                
+                if len(initial_stage) > 0 and len(late_stage) > 0:
+                    initial_agg = initial_stage.groupby('ad_name').agg({
+                        'ctr': 'mean',
+                        'link_clicks': 'sum',
+                        'amount_spent': 'sum'
+                    }).reset_index()
+                    initial_agg.columns = ['ad_name', 'initial_ctr', 'initial_clicks', 'initial_spend']
+                    
+                    late_agg = late_stage.groupby('ad_name').agg({
+                        'ctr': 'mean',
+                        'link_clicks': 'sum',
+                        'amount_spent': 'sum'
+                    }).reset_index()
+                    late_agg.columns = ['ad_name', 'late_ctr', 'late_clicks', 'late_spend']
+                    
+                    # 合并数据
+                    fatigue_data = initial_agg.merge(late_agg, on='ad_name', how='inner')
+                    
+                    # 计算下降幅度
+                    fatigue_data['CTR_Drop %'] = (
+                        (fatigue_data['initial_ctr'] - fatigue_data['late_ctr']) / fatigue_data['initial_ctr'] * 100
+                    ).round(2)
+                    
+                    fatigue_data['Clicks_per_RM100_Initial'] = (
+                        fatigue_data['initial_clicks'] / fatigue_data['initial_spend'] * 100
+                    ).round(0)
+                    
+                    fatigue_data['Clicks_per_RM100_Late'] = (
+                        fatigue_data['late_clicks'] / fatigue_data['late_spend'] * 100
+                    ).round(0)
+                    
+                    # 显示表格
+                    fatigue_display = fatigue_data[[
+                        'ad_name',
+                        'initial_ctr',
+                        'late_ctr',
+                        'CTR_Drop %',
+                        'Clicks_per_RM100_Initial',
+                        'Clicks_per_RM100_Late'
+                    ]].copy()
+                    
+                    fatigue_display.columns = [
+                        'Ad Name',
+                        'Initial CTR %',
+                        'Late CTR %',
+                        'CTR Drop %',
+                        'Clicks/RM100 (Initial)',
+                        'Clicks/RM100 (Late)'
+                    ]
+                    
+                    fatigue_display['Initial CTR %'] = fatigue_display['Initial CTR %'].apply(lambda x: f"{x:.2f}%")
+                    fatigue_display['Late CTR %'] = fatigue_display['Late CTR %'].apply(lambda x: f"{x:.2f}%")
+                    fatigue_display['CTR Drop %'] = fatigue_display['CTR Drop %'].apply(lambda x: f"{x:.1f}%")
+                    
+                    st.dataframe(fatigue_display, use_container_width=True, hide_index=True)
+                    
+                    # 图表：受众疲劳对比
+                    fig_fatigue = go.Figure()
+                    
+                    fig_fatigue.add_trace(go.Bar(
+                        x=fatigue_data['ad_name'],
+                        y=fatigue_data['initial_ctr'],
+                        name='Initial CTR %',
+                        marker=dict(color='rgba(0, 128, 128, 0.7)')
+                    ))
+                    
+                    fig_fatigue.add_trace(go.Bar(
+                        x=fatigue_data['ad_name'],
+                        y=fatigue_data['late_ctr'],
+                        name='Late CTR %',
+                        marker=dict(color='rgba(0, 128, 128, 0.4)')
+                    ))
+                    
+                    fig_fatigue.update_layout(
+                        title='Audience Fatigue - CTR Drop Over Time',
+                        xaxis_title='Ad Name',
+                        yaxis_title='CTR %',
+                        barmode='group',
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig_fatigue, use_container_width=True)
+                    
+                    st.info(
+                        "💡 **说明**：此分析显示广告从初期到后期的表现下降情况。"
+                        "**CTR Drop %** 越高，说明受众疲劳越快。"
+                        "这可以帮助您识别哪些广告需要更新创意或调整策略。"
+                    )
+                else:
+                    st.warning("数据不足，无法进行受众疲劳分析")
             
             st.divider()
             
