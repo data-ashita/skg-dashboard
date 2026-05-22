@@ -1290,15 +1290,15 @@ with tab5:
     if df_meta_ads_raw.empty:
         st.warning("No data found in the 'meta_ads' table.")
     else:
-        # --- 1. 数据预处理 ---
+        # --- 数据预处理 ---
         df_meta_ads = df_meta_ads_raw.copy()
-
-        # 转换日期字段
         for col in ['reporting_starts', 'reporting_ends', 'starts', 'ends']:
             if col in df_meta_ads.columns:
                 df_meta_ads[col] = pd.to_datetime(df_meta_ads[col], errors='coerce')
 
-        # --- 2. Tab 内 Date Filter ---
+        # -------------------------------------------------------
+        # DATE FILTER
+        # -------------------------------------------------------
         st.subheader("🗓️ Date Filter")
         meta_min = df_meta_ads['reporting_starts'].min()
         meta_max = df_meta_ads['reporting_starts'].max()
@@ -1309,7 +1309,6 @@ with tab5:
         with f_col2:
             meta_end = st.date_input("To", value=meta_max.date(), min_value=meta_min.date(), max_value=meta_max.date(), key='meta_end')
         with f_col3:
-            # 快捷按钮
             quick = st.radio("Quick Select:", ["Custom", "Last 7 Days", "Last 30 Days", "All Time"], horizontal=True, key='meta_quick')
             if quick == "Last 7 Days":
                 meta_start = (meta_max - timedelta(days=7)).date()
@@ -1321,7 +1320,6 @@ with tab5:
                 meta_start = meta_min.date()
                 meta_end = meta_max.date()
 
-        # 应用日期过滤
         df_meta_filtered = df_meta_ads[
             (df_meta_ads['reporting_starts'] >= pd.to_datetime(meta_start)) &
             (df_meta_ads['reporting_starts'] <= pd.to_datetime(meta_end))
@@ -1333,7 +1331,9 @@ with tab5:
         if df_meta_filtered.empty:
             st.warning("No data for selected date range.")
         else:
-            # --- 3. Ad Name Filter ---
+            # -------------------------------------------------------
+            # AD SELECTION
+            # -------------------------------------------------------
             st.subheader("🎯 Ad Selection")
             ad_names = sorted(df_meta_filtered['ad_name'].dropna().unique().tolist())
 
@@ -1347,20 +1347,15 @@ with tab5:
             with sel_col2:
                 st.metric("Total Ads in Range", len(ad_names))
 
-            # 根据选择决定 display df
             is_single_ad = selected_ad != "All Ads"
             df_display = df_meta_filtered[df_meta_filtered['ad_name'] == selected_ad].copy() if is_single_ad else df_meta_filtered.copy()
 
             st.divider()
 
             # -------------------------------------------------------
-            # HELPER: 计算实际有花费的天数（Days with Spend）
+            # HELPER: Days with actual spend
             # -------------------------------------------------------
             def calc_days_with_spend(df, group_col='ad_name'):
-                """
-                Days = 该广告在日期范围内，amount_spent > 0 的 reporting_starts 天数
-                （即实际有花费的天数，不是 start~end 的总跨度）
-                """
                 return (
                     df[df['amount_spent'] > 0]
                     .groupby(group_col)['reporting_starts']
@@ -1374,7 +1369,7 @@ with tab5:
             # -------------------------------------------------------
             if is_single_ad:
                 campaign_start = df_display['starts'].min()
-                campaign_end = df_display['ends'].max()
+                campaign_end   = df_display['ends'].max()
                 p1, p2 = st.columns(2)
                 with p1:
                     st.metric("📅 Campaign Start", campaign_start.strftime('%Y-%m-%d') if pd.notna(campaign_start) else "N/A")
@@ -1384,25 +1379,25 @@ with tab5:
 
             st.subheader("📊 Key Performance Indicators")
 
-            total_spend         = df_display['amount_spent'].sum()
-            total_impressions   = df_display['impressions'].sum()
-            total_reach         = df_display['reach'].sum()
-            total_link_clicks   = df_display['link_clicks'].sum()
-            total_lpv           = df_display['website_landing_page_views'].sum()
-            total_engagements   = df_display['post_engagements'].sum()
-            avg_cpm             = df_display['cpm'].mean()
-            avg_cpc             = df_display['cpc'].mean()
-            avg_ctr             = df_display['ctr'].mean()
-            cost_per_lp         = df_display['cost_per_landing_page_view'].mean()
-            cost_per_eng        = df_display['cost_per_post_engagement'].mean()
+            total_spend       = df_display['amount_spent'].sum()
+            total_impressions = df_display['impressions'].sum()
+            total_reach       = df_display['reach'].sum()
+            total_link_clicks = df_display['link_clicks'].sum()
+            total_lpv         = df_display['website_landing_page_views'].sum()
+            total_engagements = df_display['post_engagements'].sum()
+            avg_cpm           = df_display['cpm'].mean()
+            avg_cpc           = df_display['cpc'].mean()
+            avg_ctr           = df_display['ctr'].mean()
+            cost_per_lp       = df_display['cost_per_landing_page_view'].mean()
+            cost_per_eng      = df_display['cost_per_post_engagement'].mean()
 
             k1, k2, k3, k4, k5, k6 = st.columns(6)
-            k1.metric("💰 Total Spend",      f"RM {total_spend:,.2f}")
-            k2.metric("👁️ Impressions",      f"{total_impressions:,.0f}")
-            k3.metric("🔗 Link Clicks",       f"{total_link_clicks:,.0f}")
-            k4.metric("📄 Landing Pages",     f"{total_lpv:,.0f}")
-            k5.metric("💬 Engagements",       f"{total_engagements:,.0f}")
-            k6.metric("📊 Reach",             f"{total_reach:,.0f}")
+            k1.metric("💰 Total Spend",    f"RM {total_spend:,.2f}")
+            k2.metric("👁️ Impressions",    f"{total_impressions:,.0f}")
+            k3.metric("🔗 Link Clicks",     f"{total_link_clicks:,.0f}")
+            k4.metric("📄 Landing Pages",   f"{total_lpv:,.0f}")
+            k5.metric("💬 Engagements",     f"{total_engagements:,.0f}")
+            k6.metric("📊 Reach",           f"{total_reach:,.0f}")
 
             k7, k8, k9, k10, _, _ = st.columns(6)
             k7.metric("📉 Avg CPM",  f"RM {avg_cpm:,.2f}")
@@ -1413,12 +1408,126 @@ with tab5:
             st.divider()
 
             # -------------------------------------------------------
-            # PART B: Ad Performance Ranking
+            # PART B: SCORECARD
+            # Benchmark 基于同一 date range 内所有广告的中位数
+            # 评分维度: CTR, CPC, LPV CVR, Cost/LPV, CPM
+            # 每个维度: 🟢 Good / 🟡 Average / 🔴 Poor
+            # -------------------------------------------------------
+            st.subheader("🏅 Ad Scorecard")
+            st.caption("Each ad is scored against the **median** of all ads in the selected date range. Green = above average, Red = below average.")
+
+            # 先 aggregate per ad
+            score_base = df_meta_filtered.groupby('ad_name').agg(
+                spend=('amount_spent', 'sum'),
+                impressions=('impressions', 'sum'),
+                clicks=('link_clicks', 'sum'),
+                lpv=('website_landing_page_views', 'sum'),
+                engagements=('post_engagements', 'sum'),
+                avg_ctr=('ctr', 'mean'),
+                avg_cpc=('cpc', 'mean'),
+                avg_cpm=('cpm', 'mean'),
+                avg_cplpv=('cost_per_landing_page_view', 'mean'),
+            ).reset_index()
+
+            # LPV CVR = LPV / Clicks (landing page conversion rate)
+            score_base['lpv_cvr'] = np.where(
+                score_base['clicks'] > 0,
+                score_base['lpv'] / score_base['clicks'] * 100,
+                0
+            )
+
+            # 计算中位数作为 benchmark
+            med_ctr    = score_base['avg_ctr'].median()
+            med_cpc    = score_base['avg_cpc'].median()
+            med_cpm    = score_base['avg_cpm'].median()
+            med_cplpv  = score_base['avg_cplpv'].median()
+            med_cvr    = score_base['lpv_cvr'].median()
+
+            def score_metric(val, benchmark, higher_is_better=True):
+                """Return emoji + label based on vs benchmark"""
+                if pd.isna(val) or benchmark == 0:
+                    return "⚫ N/A"
+                ratio = val / benchmark
+                if higher_is_better:
+                    if ratio >= 1.15:   return "🟢 Good"
+                    elif ratio >= 0.85: return "🟡 Average"
+                    else:               return "🔴 Poor"
+                else:  # lower is better (cost metrics)
+                    if ratio <= 0.85:   return "🟢 Good"
+                    elif ratio <= 1.15: return "🟡 Average"
+                    else:               return "🔴 Poor"
+
+            def overall_grade(scores):
+                """Aggregate score list → overall grade"""
+                green  = scores.count("🟢 Good")
+                yellow = scores.count("🟡 Average")
+                red    = scores.count("🔴 Poor")
+                total  = green + yellow + red
+                if total == 0: return "⚫ N/A"
+                pct = green / total
+                if pct >= 0.6:   return "🟢 Strong"
+                elif pct >= 0.4: return "🟡 Mixed"
+                else:            return "🔴 Weak"
+
+            # Build scorecard rows
+            scorecard_rows = []
+            for _, row in score_base.iterrows():
+                s_ctr   = score_metric(row['avg_ctr'],   med_ctr,   higher_is_better=True)
+                s_cpc   = score_metric(row['avg_cpc'],   med_cpc,   higher_is_better=False)
+                s_cpm   = score_metric(row['avg_cpm'],   med_cpm,   higher_is_better=False)
+                s_cplpv = score_metric(row['avg_cplpv'], med_cplpv, higher_is_better=False)
+                s_cvr   = score_metric(row['lpv_cvr'],   med_cvr,   higher_is_better=True)
+                overall = overall_grade([s_ctr, s_cpc, s_cpm, s_cplpv, s_cvr])
+
+                scorecard_rows.append({
+                    'Ad Name':       row['ad_name'],
+                    'Overall':       overall,
+                    'CTR':           f"{s_ctr}  ({row['avg_ctr']:.2f}%)",
+                    'CPC':           f"{s_cpc}  (RM {row['avg_cpc']:.2f})",
+                    'CPM':           f"{s_cpm}  (RM {row['avg_cpm']:.2f})",
+                    'Cost/LPV':      f"{s_cplpv}  (RM {row['avg_cplpv']:.2f})",
+                    'LPV CVR':       f"{s_cvr}  ({row['lpv_cvr']:.1f}%)",
+                    'Total Spend':   f"RM {row['spend']:,.2f}",
+                })
+
+            sc_df = pd.DataFrame(scorecard_rows).sort_values('Overall', ascending=True)
+
+            # Benchmark info
+            with st.expander("📐 Benchmark values (median of all ads in range)"):
+                b1, b2, b3, b4, b5 = st.columns(5)
+                b1.metric("CTR Benchmark",      f"{med_ctr:.2f}%")
+                b2.metric("CPC Benchmark",      f"RM {med_cpc:.2f}")
+                b3.metric("CPM Benchmark",      f"RM {med_cpm:.2f}")
+                b4.metric("Cost/LPV Benchmark", f"RM {med_cplpv:.2f}")
+                b5.metric("LPV CVR Benchmark",  f"{med_cvr:.1f}%")
+
+            st.dataframe(sc_df, use_container_width=True, hide_index=True)
+
+            # Budget recommendation: sort by LPV/RM (most efficient)
+            score_base['LPV per RM'] = np.where(
+                score_base['spend'] > 0,
+                score_base['lpv'] / score_base['spend'],
+                0
+            )
+            budget_rec = score_base[['ad_name','spend','lpv','LPV per RM','avg_cpc','avg_ctr']].sort_values('LPV per RM', ascending=False).copy()
+            budget_rec.columns = ['Ad Name','Total Spend (RM)','Total LPV','LPV per RM spent','Avg CPC','Avg CTR %']
+            budget_rec['Total Spend (RM)'] = budget_rec['Total Spend (RM)'].apply(lambda x: f"RM {x:,.2f}")
+            budget_rec['LPV per RM spent'] = budget_rec['LPV per RM spent'].apply(lambda x: f"{x:.3f}")
+            budget_rec['Avg CPC']          = budget_rec['Avg CPC'].apply(lambda x: f"RM {x:.2f}")
+            budget_rec['Avg CTR %']        = budget_rec['Avg CTR %'].apply(lambda x: f"{x:.2f}%")
+
+            st.markdown("**💡 Budget Efficiency Ranking** — sorted by LPV per RM spent (higher = more efficient)")
+            st.dataframe(budget_rec, use_container_width=True, hide_index=True)
+
+            st.divider()
+
+            # -------------------------------------------------------
+            # PART C: Ad Performance Ranking
             # -------------------------------------------------------
             st.subheader("🏆 Ad Performance Ranking")
-            st.caption("**Days** = number of days the ad actually had spend (not campaign duration)")
+            st.caption("**Days** = number of days the ad actually had spend")
 
-            days_df = calc_days_with_spend(df_meta_filtered)  # 始终用全量计算，方便对比
+            days_df = calc_days_with_spend(df_meta_filtered)
 
             ad_summary = df_meta_filtered.groupby('ad_name').agg(
                 Total_Spend=('amount_spent', 'sum'),
@@ -1434,12 +1543,10 @@ with tab5:
 
             ad_summary = ad_summary.merge(days_df, on='ad_name', how='left')
             ad_summary['days_with_spend'] = ad_summary['days_with_spend'].fillna(0).astype(int)
-
-            # 日均指标（除以实际有花费天数）
-            ad_summary['Daily Avg Spend']      = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_Spend'] / ad_summary['days_with_spend'], 0)
+            ad_summary['Daily Avg Spend']       = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_Spend']       / ad_summary['days_with_spend'], 0)
             ad_summary['Daily Avg Impressions'] = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_Impressions'] / ad_summary['days_with_spend'], 0)
-            ad_summary['Daily Avg Clicks']      = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_Clicks'] / ad_summary['days_with_spend'], 0)
-            ad_summary['Daily Avg LPV']         = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_LPV'] / ad_summary['days_with_spend'], 0)
+            ad_summary['Daily Avg Clicks']      = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_Clicks']      / ad_summary['days_with_spend'], 0)
+            ad_summary['Daily Avg LPV']         = np.where(ad_summary['days_with_spend'] > 0, ad_summary['Total_LPV']         / ad_summary['days_with_spend'], 0)
 
             ad_summary = ad_summary.sort_values('Total_Spend', ascending=False).reset_index(drop=True)
             rank_marks = {0: '🥇', 1: '🥈', 2: '🥉'}
@@ -1453,7 +1560,6 @@ with tab5:
                 'Daily Avg LPV', 'Total_LPV',
                 'Avg_CPM', 'Avg_CPC', 'Avg_CTR'
             ]].copy()
-
             ranking_display.columns = [
                 'Rank', 'Ad Name', 'Days w/ Spend',
                 'Daily Avg Spend', 'Total Spend',
@@ -1462,11 +1568,9 @@ with tab5:
                 'Daily Avg LPV', 'Total LPV',
                 'Avg CPM', 'Avg CPC', 'Avg CTR'
             ]
-
-            # 格式化
             for col in ['Daily Avg Spend', 'Total Spend']:
                 ranking_display[col] = ranking_display[col].apply(lambda x: f"RM {x:,.2f}")
-            for col in ['Daily Avg Impressions', 'Total Impressions', 'Daily Avg Clicks', 'Total Clicks', 'Daily Avg LPV', 'Total LPV']:
+            for col in ['Daily Avg Impressions','Total Impressions','Daily Avg Clicks','Total Clicks','Daily Avg LPV','Total LPV']:
                 ranking_display[col] = ranking_display[col].apply(lambda x: f"{x:,.0f}")
             ranking_display['Avg CPM'] = ranking_display['Avg CPM'].apply(lambda x: f"RM {x:,.2f}")
             ranking_display['Avg CPC'] = ranking_display['Avg CPC'].apply(lambda x: f"RM {x:,.2f}")
@@ -1477,139 +1581,7 @@ with tab5:
             st.divider()
 
             # -------------------------------------------------------
-            # PART C: Campaign Stage Analysis (Per RM100)
-            # -------------------------------------------------------
-            st.subheader("📊 Campaign Stage Analysis — Per RM100 Spend")
-            st.caption("消除花费差异，公平对比各广告在不同阶段的效率")
-
-            if 'starts' in df_display.columns:
-                df_stage = df_display.copy()
-                df_stage['days_running'] = (
-                    pd.to_datetime(df_stage['reporting_starts']) -
-                    pd.to_datetime(df_stage['starts'])
-                ).dt.days + 1
-
-                def get_stage(d):
-                    if d <= 7:   return 'Initial (Day 1-7)'
-                    elif d <= 14: return 'Middle (Day 8-14)'
-                    else:         return 'Late (Day 15+)'
-
-                df_stage['campaign_stage'] = df_stage['days_running'].apply(get_stage)
-
-                tab_i, tab_m, tab_l = st.tabs(['🟢 Initial (Day 1-7)', '🟡 Middle (Day 8-14)', '🔴 Late (Day 15+)'])
-
-                for stage, t in [('Initial (Day 1-7)', tab_i), ('Middle (Day 8-14)', tab_m), ('Late (Day 15+)', tab_l)]:
-                    with t:
-                        sd = df_stage[df_stage['campaign_stage'] == stage]
-                        if sd.empty:
-                            st.warning("No data for this stage.")
-                            continue
-
-                        agg = sd.groupby('ad_name').agg(
-                            amount_spent=('amount_spent', 'sum'),
-                            impressions=('impressions', 'sum'),
-                            reach=('reach', 'sum'),
-                            link_clicks=('link_clicks', 'sum'),
-                            lpv=('website_landing_page_views', 'sum'),
-                            engagements=('post_engagements', 'sum'),
-                            ctr=('ctr', 'mean'),
-                            cpc=('cpc', 'mean'),
-                            cpm=('cpm', 'mean'),
-                        ).reset_index()
-
-                        # Days with spend per stage
-                        stage_days = (
-                            sd[sd['amount_spent'] > 0]
-                            .groupby('ad_name')['reporting_starts']
-                            .nunique()
-                            .reset_index()
-                            .rename(columns={'reporting_starts': 'stage_days'})
-                        )
-                        agg = agg.merge(stage_days, on='ad_name', how='left')
-                        agg['stage_days'] = agg['stage_days'].fillna(0).astype(int)
-
-                        B = 100  # RM100 baseline
-                        agg['Impr/RM100']  = (agg['impressions'] / agg['amount_spent'] * B).round(0)
-                        agg['Reach/RM100'] = (agg['reach']       / agg['amount_spent'] * B).round(0)
-                        agg['Clicks/RM100']= (agg['link_clicks'] / agg['amount_spent'] * B).round(0)
-                        agg['LPV/RM100']   = (agg['lpv']         / agg['amount_spent'] * B).round(0)
-                        agg['Eng/RM100']   = (agg['engagements'] / agg['amount_spent'] * B).round(0)
-
-                        # KPI row
-                        c1, c2, c3, c4, c5 = st.columns(5)
-                        c1.metric("Ads in Stage",   len(agg))
-                        c2.metric("Avg CTR",        f"{agg['ctr'].mean():.2f}%")
-                        c3.metric("Avg CPC",        f"RM {agg['cpc'].mean():.2f}")
-                        c4.metric("Avg CPM",        f"RM {agg['cpm'].mean():.2f}")
-                        c5.metric("Total Spend",    f"RM {agg['amount_spent'].sum():,.0f}")
-
-                        st.divider()
-
-                        tbl = agg[['ad_name', 'stage_days', 'amount_spent', 'Impr/RM100', 'Reach/RM100', 'Clicks/RM100', 'LPV/RM100', 'Eng/RM100', 'ctr', 'cpc', 'cpm']].copy()
-                        tbl.columns = ['Ad Name', 'Days w/ Spend', 'Total Spend (RM)', 'Impr/RM100', 'Reach/RM100', 'Clicks/RM100', 'LPV/RM100', 'Eng/RM100', 'CTR %', 'CPC (RM)', 'CPM (RM)']
-                        tbl['Total Spend (RM)'] = tbl['Total Spend (RM)'].apply(lambda x: f"RM {x:,.0f}")
-                        tbl['CTR %']  = tbl['CTR %'].apply(lambda x: f"{x:.2f}%")
-                        tbl['CPC (RM)'] = tbl['CPC (RM)'].apply(lambda x: f"RM {x:.2f}")
-                        tbl['CPM (RM)'] = tbl['CPM (RM)'].apply(lambda x: f"RM {x:.2f}")
-                        tbl = tbl.sort_values('Impr/RM100', ascending=False).reset_index(drop=True)
-
-                        st.dataframe(tbl, use_container_width=True, hide_index=True)
-
-                        # CTR & CPC charts
-                        ch1, ch2 = st.columns(2)
-                        with ch1:
-                            fig = px.bar(agg.sort_values('ctr', ascending=False), x='ad_name', y='ctr',
-                                         color='ctr', color_continuous_scale='Teal', template='plotly_white',
-                                         title='CTR % Comparison', labels={'ctr': 'CTR %', 'ad_name': ''})
-                            fig.update_layout(height=350, showlegend=False)
-                            st.plotly_chart(fig, use_container_width=True)
-                        with ch2:
-                            fig = px.bar(agg.sort_values('cpc'), x='ad_name', y='cpc',
-                                         color='cpc', color_continuous_scale='RdYlGn_r', template='plotly_white',
-                                         title='CPC Comparison (lower = better)', labels={'cpc': 'CPC (RM)', 'ad_name': ''})
-                            fig.update_layout(height=350, showlegend=False)
-                            st.plotly_chart(fig, use_container_width=True)
-
-            st.divider()
-
-            # -------------------------------------------------------
-            # PART D: Audience Fatigue
-            # -------------------------------------------------------
-            st.subheader("📉 Audience Fatigue Analysis")
-            st.caption("Initial vs Late stage CTR drop — higher drop = faster fatigue")
-
-            if 'campaign_stage' in df_stage.columns:
-                init_s = df_stage[df_stage['campaign_stage'] == 'Initial (Day 1-7)']
-                late_s = df_stage[df_stage['campaign_stage'] == 'Late (Day 15+)']
-
-                if not init_s.empty and not late_s.empty:
-                    i_agg = init_s.groupby('ad_name').agg(initial_ctr=('ctr','mean'), initial_clicks=('link_clicks','sum'), initial_spend=('amount_spent','sum')).reset_index()
-                    l_agg = late_s.groupby('ad_name').agg(late_ctr=('ctr','mean'), late_clicks=('link_clicks','sum'), late_spend=('amount_spent','sum')).reset_index()
-
-                    fat = i_agg.merge(l_agg, on='ad_name', how='inner')
-                    fat['CTR Drop %']             = ((fat['initial_ctr'] - fat['late_ctr']) / fat['initial_ctr'] * 100).round(2)
-                    fat['Clicks/RM100 (Initial)'] = (fat['initial_clicks'] / fat['initial_spend'] * 100).round(0)
-                    fat['Clicks/RM100 (Late)']    = (fat['late_clicks']    / fat['late_spend']    * 100).round(0)
-
-                    fd = fat[['ad_name','initial_ctr','late_ctr','CTR Drop %','Clicks/RM100 (Initial)','Clicks/RM100 (Late)']].copy()
-                    fd.columns = ['Ad Name','Initial CTR %','Late CTR %','CTR Drop %','Clicks/RM100 (Initial)','Clicks/RM100 (Late)']
-                    fd['Initial CTR %'] = fd['Initial CTR %'].apply(lambda x: f"{x:.2f}%")
-                    fd['Late CTR %']    = fd['Late CTR %'].apply(lambda x: f"{x:.2f}%")
-                    fd['CTR Drop %']    = fd['CTR Drop %'].apply(lambda x: f"{x:.1f}%")
-                    st.dataframe(fd, use_container_width=True, hide_index=True)
-
-                    fig_fat = go.Figure()
-                    fig_fat.add_trace(go.Bar(x=fat['ad_name'], y=fat['initial_ctr'], name='Initial CTR %', marker_color='rgba(0,128,128,0.8)'))
-                    fig_fat.add_trace(go.Bar(x=fat['ad_name'], y=fat['late_ctr'],    name='Late CTR %',    marker_color='rgba(0,128,128,0.3)'))
-                    fig_fat.update_layout(barmode='group', height=380, template='plotly_white', title='CTR: Initial vs Late Stage')
-                    st.plotly_chart(fig_fat, use_container_width=True)
-                else:
-                    st.info("需要至少两个阶段的数据才能进行疲劳分析。")
-
-            st.divider()
-
-            # -------------------------------------------------------
-            # PART E: Cost Metrics Charts
+            # PART D: Cost Metrics Charts
             # -------------------------------------------------------
             st.subheader("💰 Cost Metrics Comparison")
 
@@ -1618,9 +1590,6 @@ with tab5:
                 cplpv=('cost_per_landing_page_view','mean'),
                 cpe=('cost_per_post_engagement','mean')
             ).reset_index()
-
-            cm1, cm2 = st.columns(2)
-            cm3, cm4 = st.columns(2)
 
             def cost_bar(df, y_col, title, avg_val):
                 fig = px.bar(df.sort_values(y_col), x='ad_name', y=y_col,
@@ -1631,12 +1600,14 @@ with tab5:
                 fig.update_layout(height=320, showlegend=False)
                 return fig
 
+            cm1, cm2 = st.columns(2)
+            cm3, cm4 = st.columns(2)
             with cm1:
                 st.caption("⭐ Lower = better")
-                st.plotly_chart(cost_bar(cost_m, 'cpm',  'Avg CPM by Ad',  cost_m['cpm'].mean()),  use_container_width=True)
+                st.plotly_chart(cost_bar(cost_m, 'cpm',  'Avg CPM by Ad',         cost_m['cpm'].mean()),   use_container_width=True)
             with cm2:
                 st.caption("⭐ Lower = better")
-                st.plotly_chart(cost_bar(cost_m, 'cpc',  'Avg CPC by Ad',  cost_m['cpc'].mean()),  use_container_width=True)
+                st.plotly_chart(cost_bar(cost_m, 'cpc',  'Avg CPC by Ad',         cost_m['cpc'].mean()),   use_container_width=True)
             with cm3:
                 st.caption("⭐ Lower = better")
                 st.plotly_chart(cost_bar(cost_m, 'cplpv','Cost per Landing Page', cost_m['cplpv'].mean()), use_container_width=True)
@@ -1647,7 +1618,7 @@ with tab5:
             st.divider()
 
             # -------------------------------------------------------
-            # PART F: Daily Trend (single ad only)
+            # PART E: Daily Trend (single ad only)
             # -------------------------------------------------------
             st.subheader("📈 Daily Trend Analysis")
 
@@ -1675,7 +1646,6 @@ with tab5:
                     fig.update_layout(height=350)
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Spend trend
                 fig_sp = px.bar(sd2, x='Day Label', y='amount_spent',
                                 template='plotly_white', title='Daily Spend (RM)',
                                 labels={'amount_spent': 'Spend (RM)'}, color='amount_spent',
@@ -1688,7 +1658,7 @@ with tab5:
             st.divider()
 
             # -------------------------------------------------------
-            # PART G: Channel Performance
+            # PART F: Channel Performance
             # -------------------------------------------------------
             st.subheader("📱 Channel Performance (Instagram vs Facebook)")
 
@@ -1706,7 +1676,7 @@ with tab5:
             st.divider()
 
             # -------------------------------------------------------
-            # PART H: ROI Summary
+            # PART G: ROI Summary
             # -------------------------------------------------------
             st.subheader("🎯 ROI Summary")
 
@@ -1714,18 +1684,28 @@ with tab5:
 
             with r1:
                 roi_df = pd.DataFrame({
-                    'Metric': ['Total Spend','Total Landing Page Views','Cost per LPV','Total Link Clicks','Cost per Click','Total Engagements','Cost per Engagement'],
+                    'Metric': [
+                        'Total Spend',
+                        'Total Landing Page Views',
+                        'Cost per Landing Page View',
+                        'Total Link Clicks',
+                        'Cost per Link Click',
+                        'LPV CVR (LPV / Clicks)',
+                        'Total Engagements',
+                        'Cost per Engagement'
+                    ],
                     'Value': [
                         f"RM {total_spend:,.2f}",
                         f"{total_lpv:,.0f}",
                         f"RM {cost_per_lp:.2f}",
                         f"{total_link_clicks:,.0f}",
                         f"RM {total_spend/total_link_clicks:.2f}" if total_link_clicks > 0 else "N/A",
+                        f"{(total_lpv/total_link_clicks*100):.1f}%" if total_link_clicks > 0 else "N/A",
                         f"{total_engagements:,.0f}",
                         f"RM {cost_per_eng:.2f}"
                     ]
                 })
-                st.dataframe(roi_df, use_container_width=True, hide_index=True, height=280)
+                st.dataframe(roi_df, use_container_width=True, hide_index=True, height=320)
 
             with r2:
                 roi_ad = df_meta_filtered.groupby('ad_name').agg(
@@ -1738,24 +1718,10 @@ with tab5:
                     CPE=('cost_per_post_engagement','mean'),
                     CPM=('cpm','mean')
                 ).reset_index()
-                roi_ad.columns = ['Ad Name','Total Spend','Link Clicks','LPV','Engagements','Avg CPC','Avg CPLPV','Avg CPE','Avg CPM']
-
-                # Custom scatter: X vs Y
-                av = ['Total Spend','Link Clicks','LPV','Engagements','Avg CPC','Avg CPLPV','Avg CPE','Avg CPM']
-                xc, yc = st.columns(2)
-                with xc:
-                    x_m = st.selectbox("X Axis:", av, index=0, key='roi_x')
-                with yc:
-                    y_m = st.selectbox("Y Axis:", av, index=4, key='roi_y')
-
-                fig_sc = px.scatter(roi_ad, x=x_m, y=y_m, text='Ad Name', template='plotly_white',
-                                    title=f'{y_m} vs {x_m}', size='Total Spend', color='Avg CPM',
-                                    color_continuous_scale='Teal')
-                fig_sc.update_traces(textposition='top center')
-                avg_y_val = roi_ad[y_m].mean()
-                fig_sc.add_hline(y=avg_y_val, line_dash='dash', line_color='red',
-                                 annotation_text=f"Avg: {avg_y_val:.2f}")
-                fig_sc.update_layout(height=450)
-                st.plotly_chart(fig_sc, use_container_width=True)
-
+                roi_ad['LPV CVR %'] = np.where(
+                    roi_ad['Link_Clicks'] > 0,
+                    roi_ad['LPV'] / roi_ad['Link_Clicks'] * 100,
+                    0
+                )
+                roi_ad.columns = ['Ad Name','Total Spend','Link Clicks','LPV','Engagements','Avg CPC','Avg CPLPV','Avg CPE','Avg CPM','LPV CVR %']
                 st.dataframe(roi_ad, use_container_width=True, hide_index=True)
