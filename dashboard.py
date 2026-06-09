@@ -838,12 +838,13 @@ with tab2:
         # =========================================================
         total_sales = df_curr['Sales'].sum()
         total_qty = df_curr['Quantity'].sum()
-        avg_order = total_sales / len(df_curr) if len(df_curr) > 0 else 0
+        total_transactions = df_curr['Invoice Number'].nunique()
+        avg_order = total_sales / total_transactions if total_transactions > 0 else 0
 
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("💰 Total Revenue", f"RM{total_sales:,.2f}")
         k2.metric("📦 Units Sold", f"{total_qty:,.0f}")
-        k3.metric("🧾 Transactions", f"{len(df_curr):,.0f}")
+        k3.metric("🧾 Transactions", f"{total_transactions:,.0f}")
         k4.metric("🎫 Avg. Ticket Size", f"RM{avg_order:,.2f}")
         
         st.divider()
