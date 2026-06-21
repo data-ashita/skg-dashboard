@@ -240,13 +240,6 @@ with tab_online_rules:
     if df_rules.empty:
         df_rules = pd.DataFrame(columns=["id", "ar_name", "invoice_pattern", "sub_type"])
 
-    # 获取所有 ONLINE 的 AR Name 作为下拉选项
-    try:
-        online_ar_res = supabase.table("ar").select("ar_name").eq("ar_type", "ONLINE").execute()
-        online_ar_options = [r['ar_name'] for r in online_ar_res.data]
-    except:
-        online_ar_options = []
-
     edited_rules = st.data_editor(
         df_rules,
         num_rows="dynamic",
