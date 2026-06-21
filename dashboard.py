@@ -1003,14 +1003,18 @@ with tab2:
         pie_col1, pie_col2 = st.columns([1, 1])
 
         with pie_col1:
-            # Pie chart - Channel Type level
             channel_sales = df_curr.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
             fig_pie_channel = px.pie(
-                channel_sales, values='Sales', names='AR Type', hole=0.4,
+                channel_sales, values='Sales', names='AR Type', hole=0.3,
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie_channel.update_layout(height=380, margin=dict(t=30, b=0, l=0, r=0))
-            fig_pie_channel.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie_channel.update_layout(height=420, margin=dict(t=30, b=0, l=0, r=150))
+            fig_pie_channel.update_traces(
+                textposition='outside',
+                textinfo='label+percent+value',
+                texttemplate='%{label}<br>RM%{value:,.0f}<br>(%{percent})',
+                pull=[0.05] * len(channel_sales)
+            )
             st.plotly_chart(fig_pie_channel, use_container_width=True)
 
             # Filter pills
@@ -1024,19 +1028,22 @@ with tab2:
 
         with pie_col2:
             if selected_channel:
-                # 【修改】: ONLINE 用 Display Name，其他用 AR Name
                 drill_col = 'Display Name' if selected_channel == 'ONLINE' else 'AR Name'
                 drill_label = 'Sub Type' if selected_channel == 'ONLINE' else 'Customer'
-
                 drill_data = df_curr[df_curr['AR Type'] == selected_channel].groupby(drill_col)['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
                 
                 fig_pie_drill = px.pie(
-                    drill_data, values='Sales', names=drill_col, hole=0.4,
+                    drill_data, values='Sales', names=drill_col, hole=0.3,
                     color_discrete_sequence=px.colors.qualitative.Set2,
                     title=f"{selected_channel} — by {drill_label}"
                 )
-                fig_pie_drill.update_layout(height=380, margin=dict(t=50, b=0, l=0, r=0))
-                fig_pie_drill.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie_drill.update_layout(height=420, margin=dict(t=50, b=0, l=0, r=150))
+                fig_pie_drill.update_traces(
+                    textposition='outside',
+                    textinfo='label+percent+value',
+                    texttemplate='%{label}<br>RM%{value:,.0f}<br>(%{percent})',
+                    pull=[0.05] * len(drill_data)
+                )
                 st.plotly_chart(fig_pie_drill, use_container_width=True)
             else:
                 st.info("Select a channel on the left to drill down.")
