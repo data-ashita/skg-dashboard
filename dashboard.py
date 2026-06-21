@@ -802,6 +802,7 @@ with tab1:
 # === TAB 2: SALES ===
 with tab2:
     st.header("Sales Performance Analysis")
+    st.write(df_sales_raw.columns.tolist())
 
     # --- 2. 过滤主周期数据 ---
     # 【修改】: 基于 df_sales 进行日期过滤（仅日期过滤，无仓库过滤）
