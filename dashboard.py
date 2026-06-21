@@ -255,6 +255,11 @@ if df_stock_raw.empty or df_sales_raw.empty:
 
 # 4.1 处理 Sales Data
 df_sales = df_sales_raw.copy()
+df_sales['Display Name'] = np.where(
+    df_sales['AR Type'] == 'ONLINE',
+    df_sales['ar_sub_type'].fillna('ONLINE (Unclassified)'),
+    df_sales['AR Name']
+)
 # 因为 Supabase 中 Date 是 text 类型，确保转换为 datetime
 df_sales['Date'] = pd.to_datetime(df_sales['Date'])
 
