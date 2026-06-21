@@ -851,8 +851,7 @@ with tab2:
         # PART 2: Overall Company Trend
         # =========================================================
         st.subheader("1. Overall Company Trend")
-        trend_view = st.radio("Time Grouping:", ["Monthly", "Weekly"], horizontal=True, key='trend_view_radio')
-        freq = 'M' if trend_view == "Monthly" else 'W'
+        freq = 'M'
         
         trend_df = df_curr.copy()
         trend_df['Sort_Key'] = trend_df['Date'].dt.to_period(freq).dt.start_time
