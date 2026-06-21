@@ -803,38 +803,31 @@ with tab1:
 with tab2:
     st.header("Sales Performance Analysis")
 
-    # --- 2. 过滤主周期数据 ---
-    # 【修改】: 基于 df_sales 进行日期过滤（仅日期过滤，无仓库过滤）
     mask_curr = (
         (df_sales['Date'] >= pd.to_datetime(date_range[0])) & 
         (df_sales['Date'] <= pd.to_datetime(date_range[1]))
     )
     df_curr = df_sales[mask_curr].copy()
 
-    # --- 3. 过滤对比周期数据 (如果启用) ---
     df_comp_sidebar = pd.DataFrame()
     if enable_comparison and comp_range and len(comp_range) == 2:
-        # 【修改】: 同样基于 df_sales 进行日期过滤
         mask_comp = (
             (df_sales['Date'] >= pd.to_datetime(comp_range[0])) & 
             (df_sales['Date'] <= pd.to_datetime(comp_range[1]))
         )
         df_comp_sidebar = df_sales[mask_comp].copy()
 
-    # --- 4. 准备用于图表的数据 ---
-    # 【修改】: df_all_chan 现在自然地包含了已过滤的数据
     df_all_chan = pd.concat([df_comp_sidebar, df_curr], ignore_index=True)
     sorted_months_chan = []
     if not df_all_chan.empty:
         df_all_chan['Month'] = df_all_chan['Date'].dt.to_period('M').astype(str)
         sorted_months_chan = sorted(df_all_chan['Month'].unique())
     
-    # --- 5. 渲染逻辑 ---
     if df_curr.empty:
         st.warning("No sales data found for the selected date range and warehouses.")
     else:
         # =========================================================
-        # PART 1: KPI Summary (仅显示当前周期)
+        # PART 1: KPI Summary
         # =========================================================
         total_sales = df_curr['Sales'].sum()
         total_qty = df_curr['Quantity'].sum()
@@ -850,13 +843,12 @@ with tab2:
         st.divider()
 
         # =========================================================
-        # PART 2: Overall Company Trend (仅显示当前周期)
+        # PART 2: Overall Company Trend
         # =========================================================
         st.subheader("1. Overall Company Trend")
         trend_view = st.radio("Time Grouping:", ["Monthly", "Weekly"], horizontal=True, key='trend_view_radio')
         freq = 'M' if trend_view == "Monthly" else 'W'
         
-        # 【修改】: 基于 df_curr (已过滤)
         trend_df = df_curr.copy()
         trend_df['Sort_Key'] = trend_df['Date'].dt.to_period(freq).dt.start_time
         trend_df['DP'] = trend_df['Date'].dt.to_period(freq).astype(str)
@@ -877,7 +869,6 @@ with tab2:
         
         with ar_col1:
             st.caption("📊 Monthly Revenue Breakdown by Channel (Comparison Mode)")
-            # 【修改】: 基于 df_all_chan (已过滤)
             chan_data = df_all_chan.groupby(['AR Type', 'Month'])['Sales'].sum().reset_index()
             fig_ar = px.bar(chan_data, x='AR Type', y='Sales', color='Month', barmode='group', text_auto='.2s', category_orders={"Month": sorted_months_chan}, color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_ar.update_layout(height=450, legend=dict(orientation="h", y=1.1))
@@ -885,29 +876,27 @@ with tab2:
                     
         with ar_col2:
             st.caption("🏆 Top Customers Analysis")
-            
             p_label = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
             
             if not enable_comparison or df_comp_sidebar.empty:
-                # --- 正常模式 ---
-                # 【修改】: 基于 df_curr (已过滤)
-                cust_detail = df_curr.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index()
+                # 【修改】: 用 Display Name 替代 AR Name
+                cust_detail = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index()
                 cust_detail = cust_detail.sort_values('Sales', ascending=False).head(50)
-                
                 st.dataframe(
                     cust_detail, hide_index=True, use_container_width=True, height=400,
-                    column_config={"Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")}
+                    column_config={
+                        "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
+                        "Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")
+                    }
                 )
             else:
-                # --- 对比模式 ---
                 c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
                 
-                # 【修改】: 基于 df_curr 和 df_comp_sidebar (均已过滤)
-                p_sales = df_curr.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
-                c_sales = df_comp_sidebar.groupby(['AR Type', 'AR Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
+                # 【修改】: 用 Display Name 替代 AR Name
+                p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
+                c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
                 
-                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'AR Name'], how='outer').fillna(0)
-                # 【修复 KeyError】: 检查列是否存在再进行计算
+                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
                 if p_label in cust_detail.columns and c_label in cust_detail.columns:
                     cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
                 else:
@@ -917,16 +906,18 @@ with tab2:
                 st.dataframe(
                     cust_detail, hide_index=True, use_container_width=True, height=400,
                     column_config={
+                        "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
                         p_label: st.column_config.NumberColumn(p_label, format="RM%.2f"),
                         c_label: st.column_config.NumberColumn(c_label, format="RM%.2f"),
                         "Diff": st.column_config.NumberColumn("Difference", format="RM%.2f")
                     }
                 )
-        
-        # 【注意】: 后续的所有分析，如 "Detailed Customer & Product Breakdown" 和 "Product Performance & Trend Analysis"
-        # 都会自动使用已经过全局过滤的 df_curr 或 df_sales，因此无需再做额外修改。
-        # 这里我将保持原有的逻辑，因为它已经能正确工作。
-        
+
+        st.divider()
+
+        # =========================================================
+        # PART 4: 2.1 Detailed Customer & Product Breakdown
+        # =========================================================
         st.subheader("2.1 Detailed Customer & Product Breakdown")
         st.caption("💡Displaying data for the [Primary Date Range] only")
 
@@ -952,15 +943,17 @@ with tab2:
             selected_type = type_summary.iloc[selected_index]['AR Type']
 
         with dd_col2:
-            st.markdown(f"**Step 2: Customers in {selected_type if selected_type else '...'}**")
+            st.markdown(f"**Step 2: {'Sub Type' if selected_type == 'ONLINE' else 'Customers'} in {selected_type if selected_type else '...'}**")
             if selected_type:
-                name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                # 【修改】: ONLINE 用 Display Name，其他用 AR Name
+                group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
+                name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby(group_col)[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 
                 event_name = st.dataframe(
                     name_summary, hide_index=True, use_container_width=True, height=300,
                     on_select="rerun", selection_mode="single-row", key="dd_name_table",
                     column_config={
-                        "AR Name": st.column_config.TextColumn("Customer Name"),
+                        group_col: st.column_config.TextColumn("Sub Type" if selected_type == 'ONLINE' else "Customer Name"),
                         "Quantity": st.column_config.NumberColumn("Units", format="%d"),
                         "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
                     }
@@ -969,16 +962,18 @@ with tab2:
                 st.info("Please select an AR Type.")
 
         selected_name = None
+        selected_group_col = None
         if selected_type and 'event_name' in locals() and event_name and event_name.selection.rows:
             selected_index_name = event_name.selection.rows[0]
-            selected_name = name_summary.iloc[selected_index_name]['AR Name']
+            selected_group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
+            selected_name = name_summary.iloc[selected_index_name][selected_group_col]
 
         with dd_col3:
             st.markdown(f"**Step 3: Products for {selected_name if selected_name else '...'}**")
-            if selected_name:
+            if selected_name and selected_group_col:
                 product_summary = df_curr[
                     (df_curr['AR Type'] == selected_type) & 
-                    (df_curr['AR Name'] == selected_name)
+                    (df_curr[selected_group_col] == selected_name)
                 ].groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 
                 st.dataframe(
@@ -993,7 +988,59 @@ with tab2:
                 st.info("Please select a Customer.")
 
         st.divider()
-        
+
+        # =========================================================
+        # PART 5: 2.2 Channel Sales Pie Chart
+        # =========================================================
+        st.subheader("2.2 Channel Sales Distribution")
+        st.caption("💡 Select a channel to drill down into its customers / sub types.")
+
+        pie_col1, pie_col2 = st.columns([1, 1])
+
+        with pie_col1:
+            # Pie chart - Channel Type level
+            channel_sales = df_curr.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
+            fig_pie_channel = px.pie(
+                channel_sales, values='Sales', names='AR Type', hole=0.4,
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            fig_pie_channel.update_layout(height=380, margin=dict(t=30, b=0, l=0, r=0))
+            fig_pie_channel.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie_channel, use_container_width=True)
+
+            # Filter pills
+            channel_options = channel_sales['AR Type'].tolist()
+            selected_channel = st.pills(
+                "Filter by Channel:",
+                options=channel_options,
+                selection_mode="single",
+                key="pie_channel_filter"
+            )
+
+        with pie_col2:
+            if selected_channel:
+                # 【修改】: ONLINE 用 Display Name，其他用 AR Name
+                drill_col = 'Display Name' if selected_channel == 'ONLINE' else 'AR Name'
+                drill_label = 'Sub Type' if selected_channel == 'ONLINE' else 'Customer'
+
+                drill_data = df_curr[df_curr['AR Type'] == selected_channel].groupby(drill_col)['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
+                
+                fig_pie_drill = px.pie(
+                    drill_data, values='Sales', names=drill_col, hole=0.4,
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    title=f"{selected_channel} — by {drill_label}"
+                )
+                fig_pie_drill.update_layout(height=380, margin=dict(t=50, b=0, l=0, r=0))
+                fig_pie_drill.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie_drill, use_container_width=True)
+            else:
+                st.info("Select a channel on the left to drill down.")
+
+        st.divider()
+
+        # =========================================================
+        # PART 6: 3. Product Performance & Trend Analysis
+        # =========================================================
         st.subheader("3. Product Performance & Trend Analysis")
         
         curr_month_period = pd.to_datetime(date_range[1]).to_period('M')
@@ -1002,7 +1049,6 @@ with tab2:
         p_top_col1, col_spacer_p, p_top_col2 = st.columns([1, 0.1, 1])
         with p_top_col1:
             st.caption(f"📊 Sales by Category ({curr_month_period})")
-            # 【修改】: 基于 df_sales
             cat_sales = df_sales[
                 (df_sales['Date'].dt.to_period('M') == curr_month_period)
             ].groupby('Category')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
@@ -1012,8 +1058,6 @@ with tab2:
 
         with p_top_col2:
             st.caption(f"🏆 Top Selling Models ({curr_month_period})")
-            
-            # 【修改】: 基于 df_sales
             top_m = df_sales[
                 (df_sales['Date'].dt.to_period('M') == curr_month_period)
             ].groupby(['Stock Name', 'Category'])[['Quantity', 'Sales']].sum().reset_index().sort_values('Quantity', ascending=False).head(5)
@@ -1036,6 +1080,9 @@ with tab2:
         st.markdown(" ", unsafe_allow_html=True)
         st.markdown(" ", unsafe_allow_html=True)
 
+        # =========================================================
+        # PART 7: 3.1 Product Sales Traceability
+        # =========================================================
         st.subheader("3.1 Product Sales Traceability")
         st.caption("💡Displaying data for the [Primary Date Range] only.")
 
@@ -1083,17 +1130,19 @@ with tab2:
             selected_type_p = type_summary.iloc[selected_index_type]['AR Type']
 
         with p_col3:
-            st.markdown(f"**Step 3: Customers ( {selected_type_p if selected_type_p else '...'} )**")
+            st.markdown(f"**Step 3: {'Sub Type' if selected_type_p == 'ONLINE' else 'Customers'} ( {selected_type_p if selected_type_p else '...'} )**")
             if selected_type_p:
+                # 【修改】: ONLINE 用 Display Name，其他用 AR Name
+                trace_col = 'Display Name' if selected_type_p == 'ONLINE' else 'AR Name'
                 customer_summary = df_curr[
                     (df_curr['Stock Name'] == selected_model) & 
                     (df_curr['AR Type'] == selected_type_p)
-                ].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+                ].groupby(trace_col)[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 
                 st.dataframe(
                     customer_summary, hide_index=True, use_container_width=True, height=400,
                     column_config={
-                        "AR Name": st.column_config.TextColumn("Customer Name"),
+                        trace_col: st.column_config.TextColumn("Sub Type" if selected_type_p == 'ONLINE' else "Customer Name"),
                         "Quantity": st.column_config.NumberColumn("Units", format="%d"),
                         "Sales": st.column_config.NumberColumn("Customer Sales", format="RM%.2f")
                     }
@@ -1105,7 +1154,6 @@ with tab2:
 
         st.caption("📈 Top 20 Models Performance with Sparklines")
         
-        # 【修改】: 基于 df_sales
         df_full_history = df_sales[
             (df_sales['Date'].dt.to_period('M') <= curr_month_period)
         ].copy()
@@ -1118,7 +1166,6 @@ with tab2:
         spark_pivot['Trend'] = spark_pivot.values.tolist()
         spark_pivot = spark_pivot.reset_index()
 
-        # 【修改】: 基于 df_sales
         p_curr = df_sales[
             (df_sales['Date'].dt.to_period('M') == curr_month_period)
         ].groupby('Stock Name')['Quantity'].sum().reset_index().rename(columns={'Quantity':'Current'})
