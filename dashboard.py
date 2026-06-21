@@ -861,6 +861,7 @@ with tab2:
         fig_overall = px.line(trend_data, x='DP', y='Sales', markers=True, text='Sales')
         fig_overall.update_traces(textposition="top center", texttemplate='%{text:.2s}', line_color='#1f77b4', line_width=3)
         fig_overall.update_layout(height=350, xaxis_title="Time Period", yaxis_title="Revenue (RM)")
+        fig_overall.update_xaxes(type='category')
         st.plotly_chart(fig_overall, use_container_width=True)
 
         st.divider()
