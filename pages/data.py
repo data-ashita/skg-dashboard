@@ -112,7 +112,7 @@ def handle_quick_add():
 handle_quick_add()
 
 # --- 4. 资料维护 (Master Data) ---
-tab_master, tab_settings = st.tabs(["📦 AR & Warehouse Master", "🛠️ Type Settings & Protection"])
+tab_master, tab_settings, tab_online_rules = st.tabs(["📦 AR & Warehouse Master", "🛠️ Type Settings & Protection", "🌐 Online Sub Type Rules"])
 
 with tab_master:
     # 1. 选择表
@@ -227,6 +227,83 @@ with tab_settings:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Update failed: {e}")
+
+with tab_online_rules:
+    st.subheader("🌐 Online Sub Type Rules")
+    st.markdown("Define how ONLINE customers are automatically classified into sub types based on AR Name and Invoice Number pattern.")
+    st.info("💡 **Pattern options:** `numeric_only` = all digits | `alpha_numeric` = letters + numbers mixed | `any` = ignore pattern, match by AR Name only")
+
+    # 获取现有规则
+    rules_res = supabase.table("online_sub_type_rules").select("*").order("id").execute()
+    df_rules = pd.DataFrame(rules_res.data)
+
+    if df_rules.empty:
+        df_rules = pd.DataFrame(columns=["id", "ar_name", "invoice_pattern", "sub_type"])
+
+    # 获取所有 ONLINE 的 AR Name 作为下拉选项
+    try:
+        online_ar_res = supabase.table("ar").select("ar_name").eq("ar_type", "ONLINE").execute()
+        online_ar_options = [r['ar_name'] for r in online_ar_res.data]
+    except:
+        online_ar_options = []
+
+    edited_rules = st.data_editor(
+        df_rules,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        height=400,
+        column_config={
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "ar_name": st.column_config.SelectboxColumn(
+                "AR Name",
+                options=online_ar_options,
+                required=True,
+                help="Select from existing ONLINE customers"
+            ),
+            "invoice_pattern": st.column_config.SelectboxColumn(
+                "Invoice Pattern",
+                options=["numeric_only", "alpha_numeric", "any"],
+                required=True,
+                help="numeric_only = 123456 | alpha_numeric = ABC123 | any = ignore pattern"
+            ),
+            "sub_type": st.column_config.TextColumn(
+                "Sub Type",
+                required=True,
+                help="e.g. SKG Malaysia, TikTok, Lazada, Tech Gadget"
+            )
+        },
+        key="ed_online_rules"
+    )
+
+    col_save, col_info = st.columns([1, 3])
+    with col_save:
+        if st.button("💾 Save Rules", type="primary", use_container_width=True):
+            try:
+                data_to_save = edited_rules.replace({np.nan: None}).to_dict(orient='records')
+                supabase.table("online_sub_type_rules").upsert(data_to_save).execute()
+                st.success("✅ Rules saved successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+    with col_info:
+        st.caption("⚠️ Rules are matched in order — put more specific rules (e.g. same AR Name, different pattern) before general ones.")
+
+    st.divider()
+
+    # 预览当前规则的解释
+    st.subheader("📋 Current Rules Summary")
+    if not df_rules.empty:
+        for _, row in df_rules.iterrows():
+            pattern_label = {
+                "numeric_only": "Invoice is **pure numbers**",
+                "alpha_numeric": "Invoice has **letters + numbers**",
+                "any": "**Any** invoice format"
+            }.get(row['invoice_pattern'], row['invoice_pattern'])
+            
+            st.markdown(f"- AR Name = **{row['ar_name']}** + {pattern_label} → 🏷️ **{row['sub_type']}**")
+    else:
+        st.info("No rules defined yet.")
 
 st.divider()
 st.caption("SKG Data Management System © 2026")
