@@ -1005,15 +1005,14 @@ with tab2:
         with pie_col1:
             channel_sales = df_curr.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
             fig_pie_channel = px.pie(
-                channel_sales, values='Sales', names='AR Type', hole=0.3,
+                channel_sales, values='Sales', names='AR Type',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie_channel.update_layout(height=420, margin=dict(t=30, b=0, l=0, r=150))
+            fig_pie_channel.update_layout(height=420, margin=dict(t=30, b=0, l=0, r=0))
             fig_pie_channel.update_traces(
-                textposition='outside',
-                textinfo='label+percent+value',
-                texttemplate='%{label}<br>RM%{value:,.0f}<br>(%{percent})',
-                pull=[0.05] * len(channel_sales)
+                textposition='inside',
+                textinfo='label+percent',
+                textfont_size=13
             )
             st.plotly_chart(fig_pie_channel, use_container_width=True)
 
@@ -1033,16 +1032,15 @@ with tab2:
                 drill_data = df_curr[df_curr['AR Type'] == selected_channel].groupby(drill_col)['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
                 
                 fig_pie_drill = px.pie(
-                    drill_data, values='Sales', names=drill_col, hole=0.3,
+                    drill_data, values='Sales', names=drill_col,
                     color_discrete_sequence=px.colors.qualitative.Set2,
                     title=f"{selected_channel} — by {drill_label}"
                 )
-                fig_pie_drill.update_layout(height=420, margin=dict(t=50, b=0, l=0, r=150))
+                fig_pie_drill.update_layout(height=420, margin=dict(t=50, b=0, l=0, r=0))
                 fig_pie_drill.update_traces(
-                    textposition='outside',
-                    textinfo='label+percent+value',
-                    texttemplate='%{label}<br>RM%{value:,.0f}<br>(%{percent})',
-                    pull=[0.05] * len(drill_data)
+                    textposition='inside',
+                    textinfo='label+percent',
+                    textfont_size=13
                 )
                 st.plotly_chart(fig_pie_drill, use_container_width=True)
             else:
