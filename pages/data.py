@@ -255,11 +255,10 @@ with tab_online_rules:
         height=400,
         column_config={
             "id": st.column_config.NumberColumn("ID", disabled=True),
-            "ar_name": st.column_config.SelectboxColumn(
+            "ar_name": st.column_config.TextColumn(
                 "AR Name",
-                options=online_ar_options,
                 required=True,
-                help="Select from existing ONLINE customers"
+                help="Enter the exact AR Name as it appears in sales data"
             ),
             "invoice_pattern": st.column_config.SelectboxColumn(
                 "Invoice Pattern",
