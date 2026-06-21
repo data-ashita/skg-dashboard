@@ -1050,21 +1050,15 @@ with tab2:
         st.caption("📈 Sales Trend by Channel")
 
         trend_col = 'Display Name' if selected_channel == 'ONLINE' else ('AR Name' if selected_channel else 'AR Type')
-        trend_group_label = 'Sub Type / Customer' if selected_channel else 'Channel Type'
-
-        trend_view_22 = st.radio(
-            "Time Grouping:", ["Monthly", "Weekly", "Daily"],
-            horizontal=True, key='trend_view_22_radio'
-        )
-        freq_22 = 'M' if trend_view_22 == "Monthly" else ('W' if trend_view_22 == "Weekly" else 'D')
+        trend_group_label = 'Sub Type' if selected_channel == 'ONLINE' else ('Customer' if selected_channel else 'Channel Type')
 
         trend_df_22 = df_curr.copy()
 
         if selected_channel:
             trend_df_22 = trend_df_22[trend_df_22['AR Type'] == selected_channel]
 
-        trend_df_22['Sort_Key'] = trend_df_22['Date'].dt.to_period(freq_22).dt.start_time
-        trend_df_22['DP'] = trend_df_22['Date'].dt.to_period(freq_22).astype(str)
+        trend_df_22['Sort_Key'] = trend_df_22['Date'].dt.to_period('M').dt.start_time
+        trend_df_22['DP'] = trend_df_22['Date'].dt.to_period('M').astype(str)
 
         trend_data_22 = trend_df_22.groupby([trend_col, 'Sort_Key', 'DP'])['Sales'].sum().reset_index().sort_values('Sort_Key')
 
