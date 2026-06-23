@@ -848,14 +848,15 @@ with tab2:
         st.divider()
 
         # =========================================================
-        # PART 2: Overall Company Trend
+        # PART 2: Sales Trend
         # =========================================================
-        st.subheader("1. Overall Company Trend")
-        freq = 'M'
-        
-        trend_df = df_curr.copy()
-        trend_df['Sort_Key'] = trend_df['Date'].dt.to_period(freq).dt.start_time
-        trend_df['DP'] = trend_df['Date'].dt.to_period(freq).astype(str)
+        st.subheader("1. Sales Trend")
+
+        trend_df = df_sales[
+            df_sales['Date'] >= (df_sales['Date'].max() - pd.DateOffset(months=12))
+        ].copy()
+        trend_df['Sort_Key'] = trend_df['Date'].dt.to_period('M').dt.start_time
+        trend_df['DP'] = trend_df['Date'].dt.to_period('M').astype(str)
         trend_data = trend_df.groupby(['Sort_Key', 'DP'])['Sales'].sum().reset_index().sort_values('Sort_Key')
         
         fig_overall = px.line(trend_data, x='DP', y='Sales', markers=True, text='Sales')
