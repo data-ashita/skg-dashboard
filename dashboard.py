@@ -255,6 +255,8 @@ if df_stock_raw.empty or df_sales_raw.empty:
 
 # 4.1 处理 Sales Data
 df_sales = df_sales_raw.copy()
+st.write(df_sales_raw.columns.tolist())
+st.write(df_sales_raw['state'].head(10))
 df_sales['Display Name'] = np.where(
     df_sales['AR Type'] == 'ONLINE',
     df_sales['ar_sub_type'].fillna('ONLINE (Unclassified)'),
@@ -926,7 +928,6 @@ with tab2:
         # =========================================================
         st.subheader("2.1 Detailed Customer & Product Breakdown")
         st.caption("💡Displaying data for the [Primary Date Range] only")
-        st.write(df_curr[df_curr['AR Type'] == 'KA'][['AR Name', 'state']].head(20))
 
         dd_col1, dd_col2, dd_col3 = st.columns(3)
 
