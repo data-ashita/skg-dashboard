@@ -207,6 +207,7 @@ def load_data_from_supabase():
                     right_on=['ar_code', 'ar_name'], 
                     how='left'
                 )
+                print(df_sales_raw['state'].notna().sum())
                 # 【修复】: 同样处理 ar_type
                 df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'UNKNOWN')).fillna('UNKNOWN')
 
