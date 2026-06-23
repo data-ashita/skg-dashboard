@@ -926,6 +926,7 @@ with tab2:
         # =========================================================
         st.subheader("2.1 Detailed Customer & Product Breakdown")
         st.caption("💡Displaying data for the [Primary Date Range] only")
+        st.write(df_curr[df_curr['AR Type'] == 'KA'][['AR Name', 'state']].head(20))
 
         dd_col1, dd_col2, dd_col3 = st.columns(3)
 
