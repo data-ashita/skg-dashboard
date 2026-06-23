@@ -950,7 +950,6 @@ with tab2:
         with dd_col2:
             st.markdown(f"**Step 2: {'Sub Type' if selected_type == 'ONLINE' else 'Customers'} in {selected_type if selected_type else '...'}**")
             if selected_type:
-                # 【修改】: ONLINE 用 Display Name，其他用 AR Name
                 group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
                 name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby(group_col)[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 
@@ -974,23 +973,60 @@ with tab2:
             selected_name = name_summary.iloc[selected_index_name][selected_group_col]
 
         with dd_col3:
-            st.markdown(f"**Step 3: Products for {selected_name if selected_name else '...'}**")
-            if selected_name and selected_group_col:
-                product_summary = df_curr[
-                    (df_curr['AR Type'] == selected_type) & 
-                    (df_curr[selected_group_col] == selected_name)
-                ].groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-                
-                st.dataframe(
-                    product_summary, hide_index=True, use_container_width=True, height=300,
-                    column_config={
-                        "Stock Name": st.column_config.TextColumn("Model Name"),
-                        "Quantity": st.column_config.NumberColumn("Units", format="%d"),
-                        "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
-                    }
-                )
+            if selected_type == 'KA':
+                st.markdown(f"**Step 3: State for {selected_name if selected_name else '...'}**")
+                if selected_name:
+                    state_summary = df_curr[
+                        (df_curr['AR Type'] == 'KA') &
+                        (df_curr['AR Name'] == selected_name)
+                    ].groupby('state')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+
+                    event_state = st.dataframe(
+                        state_summary, hide_index=True, use_container_width=True, height=300,
+                        on_select="rerun", selection_mode="single-row", key="dd_state_table",
+                        column_config={
+                            "state": st.column_config.TextColumn("State"),
+                            "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                            "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                        }
+                    )
+                else:
+                    st.info("Please select a Customer.")
             else:
-                st.info("Please select a Customer.")
+                st.empty()
+
+        selected_state = None
+        if selected_type == 'KA' and selected_name and 'event_state' in locals() and event_state and event_state.selection.rows:
+            selected_index_state = event_state.selection.rows[0]
+            selected_state = state_summary.iloc[selected_index_state]['state']
+
+        # 第二行：全宽显示 Products
+        st.markdown("---")
+        if selected_type == 'KA':
+            st.markdown(f"**Step 4: Products for {selected_name if selected_name else '...'} — {selected_state if selected_state else 'All States'}**")
+        else:
+            st.markdown(f"**Step 3: Products for {selected_name if selected_name else '...'}**")
+
+        if selected_name:
+            product_filter = df_curr[
+                (df_curr['AR Type'] == selected_type) &
+                (df_curr[selected_group_col] == selected_name)
+            ]
+            if selected_type == 'KA' and selected_state:
+                product_filter = product_filter[product_filter['state'] == selected_state]
+
+            product_summary = product_filter.groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+
+            st.dataframe(
+                product_summary, hide_index=True, use_container_width=True, height=300,
+                column_config={
+                    "Stock Name": st.column_config.TextColumn("Model Name"),
+                    "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                    "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                }
+            )
+        else:
+            st.info("Please select a Customer.")
 
         st.divider()
 
