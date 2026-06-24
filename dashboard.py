@@ -1047,7 +1047,7 @@ with tab2:
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             fig_pie_channel.update_layout(height=420, margin=dict(t=30, b=0, l=0, r=0))
-            fig_pie_drill.update_traces(
+            fig_pie_channel.update_traces(
                 textposition='auto',
                 textinfo='label+percent',
                 textfont_size=13
@@ -1076,7 +1076,7 @@ with tab2:
                 )
                 fig_pie_drill.update_layout(height=420, margin=dict(t=50, b=0, l=0, r=0))
                 fig_pie_drill.update_traces(
-                    textposition='inside',
+                    textposition='auto',
                     textinfo='label+percent',
                     textfont_size=13
                 )
