@@ -1046,7 +1046,7 @@ with tab2:
                 channel_sales, values='Sales', names='AR Type',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie_channel.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
+            fig_pie_channel.update_layout(height=300, margin=dict(t=30, b=30, l=0, r=0))
             fig_pie_channel.update_traces(
                 textposition='auto',
                 textinfo='label+percent',
@@ -1074,7 +1074,7 @@ with tab2:
                     color_discrete_sequence=px.colors.qualitative.Set2,
                     title=f"{selected_channel} — by {drill_label}"
                 )
-                fig_pie_drill.update_layout(height=300, margin=dict(t=50, b=0, l=0, r=0))
+                fig_pie_drill.update_layout(height=300, margin=dict(t=50, b=30, l=0, r=0))
                 fig_pie_drill.update_traces(
                     textposition='auto',
                     textinfo='label+percent',
