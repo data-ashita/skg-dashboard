@@ -209,7 +209,7 @@ def load_data_from_supabase():
                 )
                 print(df_sales_raw['state'].notna().sum())
                 # 【修复】: 同样处理 ar_type
-                df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'UNKNOWN')).fillna('UNKNOWN')
+                df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'OTHERS')).fillna('OTHERS')
 
         # 合并 df_posm
         if not df_posm_raw.empty and not df_wh_master.empty:
@@ -853,18 +853,82 @@ with tab2:
         # =========================================================
         st.subheader("1. Sales Trend")
 
+        metric_options = st.pills(
+            "View by:",
+            options=["Revenue", "Units Sold", "Transactions", "Avg. Ticket Size"],
+            default=["Revenue"],
+            selection_mode="multi",
+            key='trend_metric_pills'
+        )
+
         trend_df = df_sales[
             df_sales['Date'] >= (df_sales['Date'].max() - pd.DateOffset(months=12))
         ].copy()
         trend_df['Sort_Key'] = trend_df['Date'].dt.to_period('M').dt.start_time
         trend_df['DP'] = trend_df['Date'].dt.to_period('M').astype(str)
-        trend_data = trend_df.groupby(['Sort_Key', 'DP'])['Sales'].sum().reset_index().sort_values('Sort_Key')
-        
-        fig_overall = px.line(trend_data, x='DP', y='Sales', markers=True, text='Sales')
-        fig_overall.update_traces(textposition="top center", texttemplate='%{text:.2s}', line_color='#1f77b4', line_width=3)
-        fig_overall.update_layout(height=350, xaxis_title="Time Period", yaxis_title="Revenue (RM)")
-        fig_overall.update_xaxes(type='category')
-        st.plotly_chart(fig_overall, use_container_width=True)
+
+        rev_data = trend_df.groupby(['Sort_Key','DP'])['Sales'].sum().reset_index().rename(columns={'Sales':'Revenue'})
+        qty_data = trend_df.groupby(['Sort_Key','DP'])['Quantity'].sum().reset_index().rename(columns={'Quantity':'Units Sold'})
+        txn_data = trend_df.groupby(['Sort_Key','DP'])['Invoice Number'].nunique().reset_index().rename(columns={'Invoice Number':'Transactions'})
+        avg_rev  = trend_df.groupby(['Sort_Key','DP'])['Sales'].sum()
+        avg_txn  = trend_df.groupby(['Sort_Key','DP'])['Invoice Number'].nunique()
+        avg_data = (avg_rev / avg_txn).reset_index()
+        avg_data.columns = ['Sort_Key', 'DP', 'Avg. Ticket Size']
+
+        from functools import reduce
+        all_data = reduce(lambda l, r: pd.merge(l, r, on=['Sort_Key','DP'], how='outer'),
+                        [rev_data, qty_data, txn_data, avg_data])
+        all_data = all_data.sort_values('Sort_Key')
+
+        if metric_options:
+            # Revenue 和 Avg. Ticket Size 用左轴 (RM)，Units Sold 和 Transactions 用右轴 (数量)
+            left_axis  = [m for m in metric_options if m in ['Revenue']]
+            right_axis = [m for m in metric_options if m in ['Units Sold', 'Transactions', 'Avg. Ticket Size']]
+
+            colors = {
+                'Revenue': '#1f77b4',
+                'Units Sold': '#ff7f0e',
+                'Transactions': '#2ca02c',
+                'Avg. Ticket Size': '#9467bd'
+            }
+
+            fig_overall = go.Figure()
+
+            for metric in left_axis:
+                fig_overall.add_trace(go.Scatter(
+                    x=all_data['DP'], y=all_data[metric],
+                    name=metric, mode='lines+markers+text',
+                    text=all_data[metric].apply(lambda x: f'RM{x:,.0f}'),
+                    textposition='top center',
+                    textfont=dict(size=13),
+                    line=dict(color=colors[metric], width=3),
+                    yaxis='y1'
+                ))
+
+            for metric in right_axis:
+                fig_overall.add_trace(go.Scatter(
+                    x=all_data['DP'], y=all_data[metric],
+                    name=metric, mode='lines+markers+text',
+                    text=all_data[metric].apply(lambda x: f'{x:,.0f}'),
+                    textposition='bottom center',
+                    textfont=dict(size=13),
+                    line=dict(color=colors[metric], width=3),
+                    yaxis='y2'
+                ))
+
+            fig_overall.update_layout(
+                height=400,
+                margin=dict(t=30, b=80, l=60, r=60),  # 调 margin
+                xaxis=dict(type='category', title='Time Period'),
+                yaxis=dict(title='RM (Revenue)', showgrid=True),
+                yaxis2=dict(title='Count / Avg Ticket (RM)', overlaying='y', side='right', showgrid=False),
+                legend=dict(orientation='h', y=-0.2),
+                template='plotly_white',
+                font=dict(size=12)  # 调全局 font size
+            )
+            st.plotly_chart(fig_overall, use_container_width=True)
+        else:
+            st.info("Please select at least one metric.")
 
         st.divider()
 
@@ -1038,7 +1102,7 @@ with tab2:
         st.subheader("2.2 Channel Sales Distribution")
         st.caption("💡 Select a channel to drill down into its customers / sub types.")
 
-        pie_col1, pie_col2 = st.columns([1, 1])
+        pie_col1, pie_spacer, pie_col2 = st.columns([1, 0.1, 1])
 
         with pie_col1:
             channel_sales = df_curr.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
@@ -1046,7 +1110,7 @@ with tab2:
                 channel_sales, values='Sales', names='AR Type',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie_channel.update_layout(height=300, margin=dict(t=30, b=30, l=0, r=0))
+            fig_pie_channel.update_layout(height=350, margin=dict(t=30, b=80, l=0, r=0))
             fig_pie_channel.update_traces(
                 textposition='auto',
                 textinfo='label+percent',
@@ -1074,10 +1138,10 @@ with tab2:
                     color_discrete_sequence=px.colors.qualitative.Set2,
                     title=f"{selected_channel} — by {drill_label}"
                 )
-                fig_pie_drill.update_layout(height=300, margin=dict(t=50, b=30, l=0, r=0))
+                fig_pie_drill.update_layout(height=350, margin=dict(t=30, b=80, l=0, r=0))
                 fig_pie_drill.update_traces(
                     textposition='auto',
-                    textinfo='label+percent',
+                    textinfo='percent',
                     textfont_size=13
                 )
                 st.plotly_chart(fig_pie_drill, use_container_width=True)
@@ -1131,7 +1195,7 @@ with tab2:
                 (df_sales['Date'].dt.to_period('M') == curr_month_period)
             ].groupby('Category')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
             fig_cat = px.pie(cat_sales, values='Sales', names='Category', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_cat.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
+            fig_cat.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig_cat, use_container_width=True)
 
         with p_top_col2:
