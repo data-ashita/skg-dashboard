@@ -209,7 +209,7 @@ def load_data_from_supabase():
                 )
                 print(df_sales_raw['state'].notna().sum())
                 # 【修复】: 同样处理 ar_type
-                df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'OTHERS')).fillna('OTHERS')
+                df_sales_raw['ar_type'] = df_sales_raw['Master_AR_Type'].fillna(df_sales_raw.get('ar_type', 'UNKNOWN')).fillna('UNKNOWN')
 
         # 合并 df_posm
         if not df_posm_raw.empty and not df_wh_master.empty:
@@ -853,82 +853,18 @@ with tab2:
         # =========================================================
         st.subheader("1. Sales Trend")
 
-        metric_options = st.pills(
-            "View by:",
-            options=["Revenue", "Units Sold", "Transactions", "Avg. Ticket Size"],
-            default=["Revenue"],
-            selection_mode="multi",
-            key='trend_metric_pills'
-        )
-
         trend_df = df_sales[
             df_sales['Date'] >= (df_sales['Date'].max() - pd.DateOffset(months=12))
         ].copy()
         trend_df['Sort_Key'] = trend_df['Date'].dt.to_period('M').dt.start_time
         trend_df['DP'] = trend_df['Date'].dt.to_period('M').astype(str)
-
-        rev_data = trend_df.groupby(['Sort_Key','DP'])['Sales'].sum().reset_index().rename(columns={'Sales':'Revenue'})
-        qty_data = trend_df.groupby(['Sort_Key','DP'])['Quantity'].sum().reset_index().rename(columns={'Quantity':'Units Sold'})
-        txn_data = trend_df.groupby(['Sort_Key','DP'])['Invoice Number'].nunique().reset_index().rename(columns={'Invoice Number':'Transactions'})
-        avg_rev  = trend_df.groupby(['Sort_Key','DP'])['Sales'].sum()
-        avg_txn  = trend_df.groupby(['Sort_Key','DP'])['Invoice Number'].nunique()
-        avg_data = (avg_rev / avg_txn).reset_index()
-        avg_data.columns = ['Sort_Key', 'DP', 'Avg. Ticket Size']
-
-        from functools import reduce
-        all_data = reduce(lambda l, r: pd.merge(l, r, on=['Sort_Key','DP'], how='outer'),
-                        [rev_data, qty_data, txn_data, avg_data])
-        all_data = all_data.sort_values('Sort_Key')
-
-        if metric_options:
-            # Revenue 和 Avg. Ticket Size 用左轴 (RM)，Units Sold 和 Transactions 用右轴 (数量)
-            left_axis  = [m for m in metric_options if m in ['Revenue']]
-            right_axis = [m for m in metric_options if m in ['Units Sold', 'Transactions', 'Avg. Ticket Size']]
-
-            colors = {
-                'Revenue': '#1f77b4',
-                'Units Sold': '#ff7f0e',
-                'Transactions': '#2ca02c',
-                'Avg. Ticket Size': '#9467bd'
-            }
-
-            fig_overall = go.Figure()
-
-            for metric in left_axis:
-                fig_overall.add_trace(go.Scatter(
-                    x=all_data['DP'], y=all_data[metric],
-                    name=metric, mode='lines+markers+text',
-                    text=all_data[metric].apply(lambda x: f'RM{x:,.0f}'),
-                    textposition='top center',
-                    textfont=dict(size=13),
-                    line=dict(color=colors[metric], width=3),
-                    yaxis='y1'
-                ))
-
-            for metric in right_axis:
-                fig_overall.add_trace(go.Scatter(
-                    x=all_data['DP'], y=all_data[metric],
-                    name=metric, mode='lines+markers+text',
-                    text=all_data[metric].apply(lambda x: f'{x:,.0f}'),
-                    textposition='bottom center',
-                    textfont=dict(size=13),
-                    line=dict(color=colors[metric], width=3),
-                    yaxis='y2'
-                ))
-
-            fig_overall.update_layout(
-                height=400,
-                margin=dict(t=30, b=80, l=60, r=60),  # 调 margin
-                xaxis=dict(type='category', title='Time Period'),
-                yaxis=dict(title='RM (Revenue)', showgrid=True),
-                yaxis2=dict(title='Count / Avg Ticket (RM)', overlaying='y', side='right', showgrid=False),
-                legend=dict(orientation='h', y=-0.2),
-                template='plotly_white',
-                font=dict(size=12)  # 调全局 font size
-            )
-            st.plotly_chart(fig_overall, use_container_width=True)
-        else:
-            st.info("Please select at least one metric.")
+        trend_data = trend_df.groupby(['Sort_Key', 'DP'])['Sales'].sum().reset_index().sort_values('Sort_Key')
+        
+        fig_overall = px.line(trend_data, x='DP', y='Sales', markers=True, text='Sales')
+        fig_overall.update_traces(textposition="top center", texttemplate='%{text:.2s}', line_color='#1f77b4', line_width=3)
+        fig_overall.update_layout(height=350, xaxis_title="Time Period", yaxis_title="Revenue (RM)")
+        fig_overall.update_xaxes(type='category')
+        st.plotly_chart(fig_overall, use_container_width=True)
 
         st.divider()
 
@@ -967,12 +903,20 @@ with tab2:
                 p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
                 c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
                 
-                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
+                cust_detail = pd.merge(
+                    p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer',
+                    suffixes=('', '_dup')
+                ).fillna(0)
                 if p_label in cust_detail.columns and c_label in cust_detail.columns:
                     cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
+                    sort_col = p_label
                 else:
                     cust_detail['Diff'] = 0
-                cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
+                    # p_label/c_label 列名冲突或缺失时（例如两个期间标签相同），
+                    # 退回用第一个数值列排序，避免 KeyError
+                    numeric_cols = [c for c in cust_detail.columns if c not in ('AR Type', 'Display Name')]
+                    sort_col = numeric_cols[0] if numeric_cols else 'Diff'
+                cust_detail = cust_detail.sort_values(sort_col, ascending=False).head(50)
                 
                 st.dataframe(
                     cust_detail, hide_index=True, use_container_width=True, height=400,
@@ -1014,113 +958,57 @@ with tab2:
             selected_type = type_summary.iloc[selected_index]['AR Type']
 
         with dd_col2:
-            if selected_type == 'KA':
-                drill_by = st.pills(
-                    "Drill by:",
-                    options=["Customer", "State"],
-                    default="Customer",
-                    selection_mode="single",
-                    key="ka_drill_pills"
-                )
+            st.markdown(f"**Step 2: {'Sub Type' if selected_type == 'ONLINE' else 'Customers'} in {selected_type if selected_type else '...'}**")
+            if selected_type:
+                group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
+                name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby(group_col)[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 
-                if drill_by == "Customer":
-                    st.markdown(f"**Step 2: Customers in KA**")
-                    group_col = 'AR Name'
-                    name_summary = df_curr[df_curr['AR Type'] == 'KA'].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-                else:
-                    st.markdown(f"**Step 2: State in KA**")
-                    group_col = 'state'
-                    name_summary = df_curr[df_curr['AR Type'] == 'KA'].groupby('state')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-
                 event_name = st.dataframe(
                     name_summary, hide_index=True, use_container_width=True, height=300,
                     on_select="rerun", selection_mode="single-row", key="dd_name_table",
                     column_config={
-                        group_col: st.column_config.TextColumn("Customer" if drill_by == "Customer" else "State"),
+                        group_col: st.column_config.TextColumn("Sub Type" if selected_type == 'ONLINE' else "Customer Name"),
                         "Quantity": st.column_config.NumberColumn("Units", format="%d"),
                         "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
                     }
                 )
             else:
-                st.markdown(f"**Step 2: {'Sub Type' if selected_type == 'ONLINE' else 'Customers'} in {selected_type if selected_type else '...'}**")
-                if selected_type:
-                    group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
-                    name_summary = df_curr[df_curr['AR Type'] == selected_type].groupby(group_col)[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-                    event_name = st.dataframe(
-                        name_summary, hide_index=True, use_container_width=True, height=300,
-                        on_select="rerun", selection_mode="single-row", key="dd_name_table",
+                st.info("Please select an AR Type.")
+
+        selected_name = None
+        selected_group_col = None
+        if selected_type and 'event_name' in locals() and event_name and event_name.selection.rows:
+            selected_index_name = event_name.selection.rows[0]
+            selected_group_col = 'Display Name' if selected_type == 'ONLINE' else 'AR Name'
+            selected_name = name_summary.iloc[selected_index_name][selected_group_col]
+
+        with dd_col3:
+            if selected_type == 'KA':
+                st.markdown(f"**Step 3: State for {selected_name if selected_name else '...'}**")
+                if selected_name:
+                    state_summary = df_curr[
+                        (df_curr['AR Type'] == 'KA') &
+                        (df_curr['AR Name'] == selected_name)
+                    ].groupby('state')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+
+                    event_state = st.dataframe(
+                        state_summary, hide_index=True, use_container_width=True, height=300,
+                        on_select="rerun", selection_mode="single-row", key="dd_state_table",
                         column_config={
-                            group_col: st.column_config.TextColumn("Sub Type" if selected_type == 'ONLINE' else "Customer Name"),
+                            "state": st.column_config.TextColumn("State"),
                             "Quantity": st.column_config.NumberColumn("Units", format="%d"),
                             "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
                         }
                     )
                 else:
-                    st.info("Please select an AR Type.")
-
-        selected_name = None
-        selected_name = None
-        selected_group_col = None
-        if selected_type and 'event_name' in locals() and event_name and event_name.selection.rows:
-            selected_index_name = event_name.selection.rows[0]
-            if selected_type == 'ONLINE':
-                selected_group_col = 'Display Name'
-            elif selected_type == 'KA' and drill_by == 'State':
-                selected_group_col = 'state'
-            else:
-                selected_group_col = 'AR Name'
-            selected_name = name_summary.iloc[selected_index_name][selected_group_col]
-
-        with dd_col3:
-            if selected_type == 'KA':
-                if drill_by == "Customer":
-                    st.markdown(f"**Step 3: State for {selected_name if selected_name else '...'}**")
-                    if selected_name:
-                        state_summary = df_curr[
-                            (df_curr['AR Type'] == 'KA') &
-                            (df_curr['AR Name'] == selected_name)
-                        ].groupby('state')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-
-                        event_state = st.dataframe(
-                            state_summary, hide_index=True, use_container_width=True, height=300,
-                            on_select="rerun", selection_mode="single-row", key="dd_state_table",
-                            column_config={
-                                "state": st.column_config.TextColumn("State"),
-                                "Quantity": st.column_config.NumberColumn("Units", format="%d"),
-                                "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
-                            }
-                        )
-                    else:
-                        st.info("Please select a Customer.")
-                else:
-                    st.markdown(f"**Step 3: Customer for {selected_name if selected_name else '...'}**")
-                    if selected_name:
-                        cust_summary = df_curr[
-                            (df_curr['AR Type'] == 'KA') &
-                            (df_curr['state'] == selected_name)
-                        ].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
-
-                        event_state = st.dataframe(
-                            cust_summary, hide_index=True, use_container_width=True, height=300,
-                            on_select="rerun", selection_mode="single-row", key="dd_state_table",
-                            column_config={
-                                "AR Name": st.column_config.TextColumn("Customer"),
-                                "Quantity": st.column_config.NumberColumn("Units", format="%d"),
-                                "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
-                            }
-                        )
-                    else:
-                        st.info("Please select a State.")
+                    st.info("Please select a Customer.")
             else:
                 st.empty()
 
         selected_state = None
         if selected_type == 'KA' and selected_name and 'event_state' in locals() and event_state and event_state.selection.rows:
             selected_index_state = event_state.selection.rows[0]
-            if drill_by == "Customer":
-                selected_state = state_summary.iloc[selected_index_state]['state']
-            else:
-                selected_state = cust_summary.iloc[selected_index_state]['AR Name']
+            selected_state = state_summary.iloc[selected_index_state]['state']
 
         # 第二行：全宽显示 Products
         st.markdown("---")
@@ -1135,10 +1023,7 @@ with tab2:
                 (df_curr[selected_group_col] == selected_name)
             ]
             if selected_type == 'KA' and selected_state:
-                if drill_by == "Customer":
-                    product_filter = product_filter[product_filter['state'] == selected_state]
-                else:
-                    product_filter = product_filter[product_filter['AR Name'] == selected_state]
+                product_filter = product_filter[product_filter['state'] == selected_state]
 
             product_summary = product_filter.groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
 
@@ -1161,7 +1046,7 @@ with tab2:
         st.subheader("2.2 Channel Sales Distribution")
         st.caption("💡 Select a channel to drill down into its customers / sub types.")
 
-        pie_col1, pie_spacer, pie_col2 = st.columns([1, 0.1, 1])
+        pie_col1, pie_col2 = st.columns([1, 1])
 
         with pie_col1:
             channel_sales = df_curr.groupby('AR Type')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
@@ -1169,9 +1054,9 @@ with tab2:
                 channel_sales, values='Sales', names='AR Type',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie_channel.update_layout(height=400, margin=dict(t=30, b=80, l=0, r=0))
+            fig_pie_channel.update_layout(height=420, margin=dict(t=30, b=0, l=0, r=0))
             fig_pie_channel.update_traces(
-                textposition='auto',
+                textposition='inside',
                 textinfo='label+percent',
                 textfont_size=13
             )
@@ -1197,10 +1082,10 @@ with tab2:
                     color_discrete_sequence=px.colors.qualitative.Set2,
                     title=f"{selected_channel} — by {drill_label}"
                 )
-                fig_pie_drill.update_layout(height=400, margin=dict(t=30, b=80, l=0, r=0))
+                fig_pie_drill.update_layout(height=420, margin=dict(t=50, b=0, l=0, r=0))
                 fig_pie_drill.update_traces(
-                    textposition='auto',
-                    textinfo='percent',
+                    textposition='inside',
+                    textinfo='label+percent',
                     textfont_size=13
                 )
                 st.plotly_chart(fig_pie_drill, use_container_width=True)
@@ -1254,7 +1139,7 @@ with tab2:
                 (df_sales['Date'].dt.to_period('M') == curr_month_period)
             ].groupby('Category')['Sales'].sum().reset_index().sort_values('Sales', ascending=False)
             fig_cat = px.pie(cat_sales, values='Sales', names='Category', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_cat.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
+            fig_cat.update_layout(height=350, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig_cat, use_container_width=True)
 
         with p_top_col2:
