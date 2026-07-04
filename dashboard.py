@@ -949,6 +949,9 @@ with tab2:
             selected_index = event_type.selection.rows[0]
             selected_type = type_summary.iloc[selected_index]['AR Type']
 
+        # default drill_by
+        drill_by = "Customer"
+
         with dd_col2:
             if selected_type == 'KA':
                 drill_by = st.pills(
@@ -958,13 +961,12 @@ with tab2:
                     selection_mode="single",
                     key="ka_drill_pills"
                 )
-                
                 if drill_by == "Customer":
-                    st.markdown(f"**Step 2: Customers in KA**")
+                    st.markdown("**Step 2: Customers in KA**")
                     group_col = 'AR Name'
                     name_summary = df_curr[df_curr['AR Type'] == 'KA'].groupby('AR Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
                 else:
-                    st.markdown(f"**Step 2: State in KA**")
+                    st.markdown("**Step 2: State in KA**")
                     group_col = 'state'
                     name_summary = df_curr[df_curr['AR Type'] == 'KA'].groupby('state')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
 
@@ -993,6 +995,18 @@ with tab2:
                     )
                 else:
                     st.info("Please select an AR Type.")
+
+        selected_name = None
+        selected_group_col = None
+        if selected_type and 'event_name' in locals() and event_name and event_name.selection.rows:
+            selected_index_name = event_name.selection.rows[0]
+            if selected_type == 'ONLINE':
+                selected_group_col = 'Display Name'
+            elif selected_type == 'KA' and drill_by == 'State':
+                selected_group_col = 'state'
+            else:
+                selected_group_col = 'AR Name'
+            selected_name = name_summary.iloc[selected_index_name][selected_group_col]
 
         with dd_col3:
             if selected_type == 'KA':
@@ -1036,6 +1050,45 @@ with tab2:
                         st.info("Please select a State.")
             else:
                 st.empty()
+
+        selected_state = None
+        if selected_type == 'KA' and selected_name and 'event_state' in locals() and event_state and event_state.selection.rows:
+            selected_index_state = event_state.selection.rows[0]
+            if drill_by == "Customer":
+                selected_state = state_summary.iloc[selected_index_state]['state']
+            else:
+                selected_state = cust_summary.iloc[selected_index_state]['AR Name']
+
+        # 第二行：全宽显示 Products
+        st.markdown("---")
+        if selected_type == 'KA':
+            st.markdown(f"**Step 4: Products for {selected_name if selected_name else '...'} — {selected_state if selected_state else 'All States'}**")
+        else:
+            st.markdown(f"**Step 3: Products for {selected_name if selected_name else '...'}**")
+
+        if selected_name and selected_group_col:
+            product_filter = df_curr[
+                (df_curr['AR Type'] == selected_type) &
+                (df_curr[selected_group_col] == selected_name)
+            ]
+            if selected_type == 'KA' and selected_state:
+                if drill_by == "Customer":
+                    product_filter = product_filter[product_filter['state'] == selected_state]
+                else:
+                    product_filter = product_filter[product_filter['AR Name'] == selected_state]
+
+            product_summary = product_filter.groupby('Stock Name')[['Quantity', 'Sales']].sum().reset_index().sort_values('Sales', ascending=False)
+
+            st.dataframe(
+                product_summary, hide_index=True, use_container_width=True, height=300,
+                column_config={
+                    "Stock Name": st.column_config.TextColumn("Model Name"),
+                    "Quantity": st.column_config.NumberColumn("Units", format="%d"),
+                    "Sales": st.column_config.NumberColumn("Sales", format="RM%.2f")
+                }
+            )
+        else:
+            st.info("Please select a Customer.")
 
         st.divider()
 
