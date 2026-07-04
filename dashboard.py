@@ -903,20 +903,12 @@ with tab2:
                 p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
                 c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
                 
-                cust_detail = pd.merge(
-                    p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer',
-                    suffixes=('', '_dup')
-                ).fillna(0)
+                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
                 if p_label in cust_detail.columns and c_label in cust_detail.columns:
                     cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
-                    sort_col = p_label
                 else:
                     cust_detail['Diff'] = 0
-                    # p_label/c_label 列名冲突或缺失时（例如两个期间标签相同），
-                    # 退回用第一个数值列排序，避免 KeyError
-                    numeric_cols = [c for c in cust_detail.columns if c not in ('AR Type', 'Display Name')]
-                    sort_col = numeric_cols[0] if numeric_cols else 'Diff'
-                cust_detail = cust_detail.sort_values(sort_col, ascending=False).head(50)
+                cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
                 
                 st.dataframe(
                     cust_detail, hide_index=True, use_container_width=True, height=400,
