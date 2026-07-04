@@ -1006,9 +1006,8 @@ with tab2:
                 selected_group_col = 'state'
             else:
                 selected_group_col = 'AR Name'
-            if selected_index_name < len(name_summary):
-                selected_name = name_summary.iloc[selected_index_name][selected_group_col]    
-            selected_name = name_summary.iloc[selected_index_name][selected_group_col]
+            if 'name_summary' in locals() and selected_index_name < len(name_summary):
+                selected_name = name_summary.iloc[selected_index_name][selected_group_col]
 
         with dd_col3:
             if selected_type == 'KA':
