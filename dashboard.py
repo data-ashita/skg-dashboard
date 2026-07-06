@@ -641,28 +641,29 @@ with tab1:
         # --- 4. All SKUs Analysis ---
         st.subheader("All SKUs Analysis by Quantity")
         
-        # 定义分类按钮
-        stock_filter = st.pills(
+        # 定义分类过滤器（可多选）
+        stock_filter = st.multiselect(
             "Quick Filter:",
-            options=["All", "Warehouse", "Consign", "Warehouse and Consign"],
-            selection_mode="single",
-            default="All"
+            options=["All", "Warehouse", "Outlet", "Consign"],
+            default=["All"],
+            key="stock_type_multiselect"
         )
 
         # 【修改】: 过滤逻辑现在基于 df_stock (它包含0库存)，而不是 df_stock_positive
-        if stock_filter == "Warehouse":
-            display_stock = df_stock[df_stock['Warehouse Type'] == 'WAREHOUSE']
-        elif stock_filter == "Consign":
-            display_stock = df_stock[df_stock['Warehouse Type'] == 'CONSIGN']
-        elif stock_filter == "Warehouse and Consign":
-            display_stock = df_stock[df_stock['Warehouse Type'].isin(['WAREHOUSE', 'CONSIGN'])]
-        else:
-            # "All" 选项
+        # 说明："All" 单独选择时显示全部；如果和其他选项一起选择，则忽略 "All"，按其他选项过滤。
+        selected_stock_types = [option for option in stock_filter if option != "All"]
+        if not selected_stock_types:
             display_stock = df_stock
+            stock_filter_label = "All"
+        else:
+            selected_stock_types_upper = [option.upper() for option in selected_stock_types]
+            warehouse_type_series = df_stock['Warehouse Type'].astype(str).str.strip().str.upper()
+            display_stock = df_stock[warehouse_type_series.isin(selected_stock_types_upper)]
+            stock_filter_label = " + ".join(selected_stock_types)
 
         # 检查过滤后是否为空
         if display_stock.empty:
-            st.info(f"No stock found for: {stock_filter} (Check if the Type is correct in Master Data)")
+            st.info(f"No stock found for: {stock_filter_label} (Check if the Type is correct in Master Data)")
         else:
             # 【修改】:
             # - 基于 display_stock (包含0库存) 进行汇总
