@@ -2,44 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from supabase import create_client
-import requests
-
-LARK_WEBHOOK_URL = "https://open.larksuite.com/open-apis/bot/v2/hook/25e45e80-612c-4ab7-aa4f-e6765b5ba51c"
-
-def send_lark_notification(message):
-    try:
-        payload = {
-            "msg_type": "text",
-            "content": {"text": message}
-        }
-        requests.post(LARK_WEBHOOK_URL, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Lark notification failed: {e}")
-
-def check_and_notify_new_items(item_type, items_df, name_col, code_col):
-    """检查哪些是新的（还没通知过的），通知后记录进 Supabase"""
-    if items_df.empty:
-        return
-
-    # 获取已通知过的 keys
-    notified_res = supabase.table("lark_notified_items").select("item_key").eq("item_type", item_type).execute()
-    notified_keys = set(item['item_key'] for item in notified_res.data)
-
-    new_items = []
-    for _, row in items_df.iterrows():
-        key = f"{row[name_col]}|{row[code_col]}"
-        if key not in notified_keys:
-            new_items.append(row)
-
-    if new_items:
-        lines = [f"⚠️ Found {len(new_items)} new {item_type.upper()} combination(s) not in Master:"]
-        for row in new_items:
-            lines.append(f"- {row[name_col]} ({row[code_col]})")
-        send_lark_notification("\n".join(lines))
-
-        # 记录已通知
-        records = [{"item_type": item_type, "item_key": f"{row[name_col]}|{row[code_col]}"} for row in new_items]
-        supabase.table("lark_notified_items").upsert(records, on_conflict="item_type, item_key").execute()
 
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="SKG Master Data Management", layout="wide")
@@ -119,7 +81,6 @@ def handle_quick_add():
         # 3. 渲染通知
         if to_add_wh:
             st.warning(f"🔎 Found {len(to_add_wh)} new Warehouse combinations not in Master.")
-            check_and_notify_new_items("warehouse", pd.DataFrame(to_add_wh), "warehouse_name", "warehouse_code")
             if st.button("➕ Quick Add New Warehouses"):
                 supabase.table("warehouse").upsert(to_add_wh, on_conflict="warehouse_name, warehouse_code").execute()
                 st.rerun()
@@ -127,7 +88,6 @@ def handle_quick_add():
 
         if to_add_ar:
             st.warning(f"🔎 Found {len(to_add_ar)} new AR combinations not in Master.")
-            check_and_notify_new_items("ar", pd.DataFrame(to_add_ar), "ar_name", "ar_code")
             if st.button("➕ Quick Add New AR Codes"):
                 supabase.table("ar").upsert(to_add_ar, on_conflict="ar_name, ar_code").execute()
                 st.rerun()
