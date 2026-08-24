@@ -906,66 +906,9 @@ with tab2:
 
         st.markdown(" ")
 
-        # --- 下半部分：Top Customers（全宽）---
-        st.caption("🏆 Top Customers Analysis")
-        p_label = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
-
-        if not enable_comparison or df_comp_sidebar.empty:
-            # 【修改】: 用 Display Name 替代 AR Name
-            cust_detail = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index()
-            cust_detail = cust_detail.sort_values('Sales', ascending=False).head(50)
-            st.dataframe(
-                cust_detail, hide_index=True, use_container_width=True, height=500,
-                column_config={
-                    "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
-                    "Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")
-                }
-            )
-        else:
-            c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
-
-            # 各区间天数，用于换算日均
-            p_days = (pd.to_datetime(date_range[1]) - pd.to_datetime(date_range[0])).days + 1
-            c_days = (pd.to_datetime(comp_range[1]) - pd.to_datetime(comp_range[0])).days + 1
-
-            p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': 'P_Total'})
-            c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': 'C_Total'})
-
-            cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
-
-            # 日均 + 日均差异（这才是可比的口径）
-            cust_detail['P_Daily'] = cust_detail['P_Total'] / p_days
-            cust_detail['C_Daily'] = cust_detail['C_Total'] / c_days
-            cust_detail['D_Daily'] = cust_detail['P_Daily'] - cust_detail['C_Daily']
-            cust_detail['D_Pct'] = np.where(
-                cust_detail['C_Daily'] > 0,
-                (cust_detail['P_Daily'] - cust_detail['C_Daily']) / cust_detail['C_Daily'] * 100,
-                0
-            )
-
-            cust_detail = cust_detail.sort_values('P_Total', ascending=False).head(50)
-            cust_detail = cust_detail[['AR Type', 'Display Name', 'P_Total', 'P_Daily', 'C_Total', 'C_Daily', 'D_Daily', 'D_Pct']]
-
-            st.caption(f"📏 Primary = {p_days} days · Comparison = {c_days} days — 区间长度不同，请看**日均**对比")
-
-            st.dataframe(
-                cust_detail, hide_index=True, use_container_width=True, height=500,
-                column_config={
-                    "AR Type": st.column_config.TextColumn("AR Type", width="small"),
-                    "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
-                    "P_Total": st.column_config.NumberColumn(f"{p_label} (Total)", format="RM%.2f"),
-                    "P_Daily": st.column_config.NumberColumn("↳ Per Day", format="RM%.2f"),
-                    "C_Total": st.column_config.NumberColumn(f"{c_label} (Total)", format="RM%.2f"),
-                    "C_Daily": st.column_config.NumberColumn("↳ Per Day", format="RM%.2f"),
-                    "D_Daily": st.column_config.NumberColumn("Δ Per Day", format="RM%.2f"),
-                    "D_Pct": st.column_config.NumberColumn("Δ %", format="%.1f%%"),
-                }
-            )
-        st.markdown(" ")
-
+        # --- 下半部分：Channel Deep Dive（逐月走势）---
         st.markdown("##### 🔎 Channel Deep Dive")
 
-        # --- Filter ---
         chan_opts = df_all_chan.groupby('AR Type')['Sales'].sum().sort_values(ascending=False).index.tolist()
         dd_channel = st.pills(
             "Select channel to inspect:",
@@ -1001,9 +944,17 @@ with tab2:
                 .reset_index(name='Sales')
             )
 
+            # 只在首末两个月放文字，中间月份留空（靠 hover）
+            m_first, m_last = sorted_months_chan[0], sorted_months_chan[-1]
+            sl['Label'] = np.where(
+                sl['Month'].isin([m_first, m_last]) & (sl['Sales'] > 0),
+                (sl['Sales'] / 1000).round(0).astype(int).astype(str) + 'k',
+                ''
+            )
+
             fig_sl = px.line(
                 sl, x='Month', y='Sales', color='Entity',
-                markers=True, template='plotly_white',
+                markers=True, text='Label', template='plotly_white',
                 category_orders={"Month": sorted_months_chan},
                 color_discrete_sequence=px.colors.qualitative.Set2,
                 labels={'Sales': 'Revenue (RM)', 'Entity': dd_label}
@@ -1011,21 +962,12 @@ with tab2:
             fig_sl.update_traces(
                 marker=dict(size=9),
                 line=dict(width=3),
+                textfont=dict(size=10),
                 hovertemplate='%{fullData.name}<br>%{x}: RM%{y:,.0f}<extra></extra>'
             )
-
-            # 在首末两点标数值，中间点靠 hover
-            m_first, m_last = sorted_months_chan[0], sorted_months_chan[-1]
-            for ent in sl['Entity'].unique():
-                sub = sl[sl['Entity'] == ent]
-                for m in [m_first, m_last]:
-                    v = sub.loc[sub['Month'] == m, 'Sales']
-                    if not v.empty and v.iloc[0] > 0:
-                        fig_sl.add_annotation(
-                            x=m, y=v.iloc[0], text=f"{v.iloc[0]/1000:,.0f}k",
-                            showarrow=False, font=dict(size=10),
-                            xshift=-28 if m == m_first else 28
-                        )
+            # 每条 trace 的首末文字分别朝左 / 朝右（跟随 legend 显示隐藏）
+            for tr in fig_sl.data:
+                tr.textposition = ['middle left' if x == m_first else 'middle right' for x in tr.x]
 
             fig_sl.update_layout(
                 height=460,
@@ -1034,7 +976,7 @@ with tab2:
             )
             fig_sl.update_xaxes(type='category')
             st.plotly_chart(fig_sl, use_container_width=True)
-            st.caption(f"💡 {m_first} → {m_last} 逐月走势。线越陡变化越大；线交叉 = 排名换位。悬停看每月数值。")
+            st.caption(f"💡 {m_first} → {m_last} 逐月走势。线越陡变化越大；线交叉 = 排名换位。点 legend 可隐藏线条。")
 
         st.divider()
 
