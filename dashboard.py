@@ -962,6 +962,7 @@ with tab2:
                 }
             )
         st.markdown(" ")
+
         st.markdown("##### 🔎 Channel Deep Dive")
 
         # --- Filter ---
@@ -976,75 +977,65 @@ with tab2:
 
         if not dd_channel:
             st.info("Select a channel above to see the breakdown.")
+        elif len(sorted_months_chan) < 2:
+            st.info("需要至少两个月的数据才能画走势图，请放宽日期范围。")
         else:
             dd_col = 'Display Name' if dd_channel == 'ONLINE' else 'AR Name'
             dd_label = 'Sub Type' if dd_channel == 'ONLINE' else 'Customer'
 
             dd_base = df_all_chan[df_all_chan['AR Type'] == dd_channel].copy()
 
-            # Top N 之外归入 Others，避免图表太乱
+            # Top N 之外归入 Others，避免线太多
             totals = dd_base.groupby(dd_col)['Sales'].sum().sort_values(ascending=False)
             top_n = totals.head(8).index.tolist()
             dd_base['Entity'] = np.where(dd_base[dd_col].isin(top_n), dd_base[dd_col], 'Others')
 
             dd_month = dd_base.groupby(['Entity', 'Month'])['Sales'].sum().reset_index()
 
-            view = st.radio(
-                "View as:",
-                ["Stacked Area", "Slope", "Heatmap Table"],
-                horizontal=True,
-                key="deepdive_view"
+            # 补齐缺失月份为 0，避免断线 / 孤点
+            sl = (
+                dd_month.set_index(['Entity', 'Month'])['Sales']
+                .unstack(fill_value=0)
+                .reindex(columns=sorted_months_chan, fill_value=0)
+                .stack()
+                .reset_index(name='Sales')
             )
 
-            # ---------- ① Stacked Area ----------
-            if view == "Stacked Area":
-                fig_dd = px.area(
-                    dd_month, x='Month', y='Sales', color='Entity',
-                    category_orders={"Month": sorted_months_chan},
-                    color_discrete_sequence=px.colors.qualitative.Pastel,
-                    template='plotly_white',
-                    labels={'Sales': 'Revenue (RM)', 'Entity': dd_label}
-                )
-                fig_dd.update_layout(height=430, legend=dict(orientation="h", y=-0.18, title=None))
-                fig_dd.update_xaxes(type='category')
-                st.plotly_chart(fig_dd, use_container_width=True)
-                st.caption(f"💡 层的厚度 = 该 {dd_label} 的贡献。总量在跌时，看哪一层变薄了。")
+            fig_sl = px.line(
+                sl, x='Month', y='Sales', color='Entity',
+                markers=True, template='plotly_white',
+                category_orders={"Month": sorted_months_chan},
+                color_discrete_sequence=px.colors.qualitative.Set2,
+                labels={'Sales': 'Revenue (RM)', 'Entity': dd_label}
+            )
+            fig_sl.update_traces(
+                marker=dict(size=9),
+                line=dict(width=3),
+                hovertemplate='%{fullData.name}<br>%{x}: RM%{y:,.0f}<extra></extra>'
+            )
 
-            # ---------- ② Slope ----------
-            elif view == "Slope":
-                if len(sorted_months_chan) < 2:
-                    st.info("需要至少两个月才能画斜率图。")
-                else:
-                    m_first, m_last = sorted_months_chan[0], sorted_months_chan[-1]
-                    sl = dd_month[dd_month['Month'].isin([m_first, m_last])]
-                    fig_sl = px.line(
-                        sl, x='Month', y='Sales', color='Entity',
-                        markers=True, template='plotly_white',
-                        category_orders={"Month": [m_first, m_last]},
-                        color_discrete_sequence=px.colors.qualitative.Set2,
-                        labels={'Sales': 'Revenue (RM)', 'Entity': dd_label}
-                    )
-                    fig_sl.update_traces(marker=dict(size=10), line=dict(width=3))
-                    fig_sl.update_layout(height=430, legend=dict(orientation="h", y=-0.18, title=None))
-                    fig_sl.update_xaxes(type='category')
-                    st.plotly_chart(fig_sl, use_container_width=True)
-                    st.caption(f"💡 {m_first} → {m_last}。线越陡跌得越狠；线交叉 = 排名换位。")
+            # 在首末两点标数值，中间点靠 hover
+            m_first, m_last = sorted_months_chan[0], sorted_months_chan[-1]
+            for ent in sl['Entity'].unique():
+                sub = sl[sl['Entity'] == ent]
+                for m in [m_first, m_last]:
+                    v = sub.loc[sub['Month'] == m, 'Sales']
+                    if not v.empty and v.iloc[0] > 0:
+                        fig_sl.add_annotation(
+                            x=m, y=v.iloc[0], text=f"{v.iloc[0]/1000:,.0f}k",
+                            showarrow=False, font=dict(size=10),
+                            xshift=-28 if m == m_first else 28
+                        )
 
-            # ---------- ③ Heatmap Table ----------
-            else:
-                pivot = dd_base.groupby([dd_col, 'Month'])['Sales'].sum().unstack(fill_value=0)
-                pivot = pivot.reindex(columns=sorted_months_chan, fill_value=0)
-                pivot['Total'] = pivot.sum(axis=1)
-                pivot = pivot.sort_values('Total', ascending=False).drop(columns='Total').reset_index()
+            fig_sl.update_layout(
+                height=460,
+                legend=dict(orientation="h", y=-0.18, title=None),
+                margin=dict(l=80, r=80)
+            )
+            fig_sl.update_xaxes(type='category')
+            st.plotly_chart(fig_sl, use_container_width=True)
+            st.caption(f"💡 {m_first} → {m_last} 逐月走势。线越陡变化越大；线交叉 = 排名换位。悬停看每月数值。")
 
-                month_cols = sorted_months_chan
-                styled = pivot.style.background_gradient(
-                    cmap='RdYlGn', axis=1, subset=month_cols
-                ).format({c: "RM{:,.0f}" for c in month_cols})
-
-                st.dataframe(styled, use_container_width=True, hide_index=True, height=460)
-                st.caption("💡 每行内部横向比色：绿 = 该月是这个客户的高点，红 = 低点。")
-                
         st.divider()
 
         # =========================================================
