@@ -824,11 +824,22 @@ with tab2:
         )
         df_comp_sidebar = df_sales[mask_comp].copy()
 
-    df_all_chan = pd.concat([df_comp_sidebar, df_curr], ignore_index=True)
-    sorted_months_chan = []
-    if not df_all_chan.empty:
-        df_all_chan['Month'] = df_all_chan['Date'].dt.to_period('M').astype(str)
-        sorted_months_chan = sorted(df_all_chan['Month'].unique())
+    # 【修复】: 用 Period 标签区分两个区间，避免区间重叠时按月分组重复求和
+    p_label_chan = f"{date_range[0]} ~ {date_range[1]}"
+    df_curr_tag = df_curr.copy()
+    df_curr_tag['Period'] = p_label_chan
+
+    frames_chan = [df_curr_tag]
+    sorted_months_chan = [p_label_chan]
+
+    if enable_comparison and comp_range and len(comp_range) == 2 and not df_comp_sidebar.empty:
+        c_label_chan = f"{comp_range[0]} ~ {comp_range[1]}"
+        df_comp_tag = df_comp_sidebar.copy()
+        df_comp_tag['Period'] = c_label_chan
+        frames_chan.insert(0, df_comp_tag)
+        sorted_months_chan = [c_label_chan, p_label_chan]
+
+    df_all_chan = pd.concat(frames_chan, ignore_index=True)
     
     if df_curr.empty:
         st.warning("No sales data found for the selected date range and warehouses.")
@@ -876,10 +887,15 @@ with tab2:
         ar_col1, col_spacer, ar_col2 = st.columns([1, 0.1, 1])
         
         with ar_col1:
-            st.caption("📊 Monthly Revenue Breakdown by Channel (Comparison Mode)")
-            chan_data = df_all_chan.groupby(['AR Type', 'Month'])['Sales'].sum().reset_index()
-            fig_ar = px.bar(chan_data, x='AR Type', y='Sales', color='Month', barmode='group', text_auto='.2s', category_orders={"Month": sorted_months_chan}, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_ar.update_layout(height=450, legend=dict(orientation="h", y=1.1))
+            st.caption("📊 Revenue Breakdown by Channel (Comparison Mode)")
+            chan_data = df_all_chan.groupby(['AR Type', 'Period'])['Sales'].sum().reset_index()
+            fig_ar = px.bar(
+                chan_data, x='AR Type', y='Sales', color='Period',
+                barmode='group', text_auto='.2s',
+                category_orders={"Period": sorted_months_chan},
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            fig_ar.update_layout(height=450, legend=dict(orientation="h", y=1.15))
             st.plotly_chart(fig_ar, use_container_width=True)
                     
         with ar_col2:
