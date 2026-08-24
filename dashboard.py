@@ -824,22 +824,16 @@ with tab2:
         )
         df_comp_sidebar = df_sales[mask_comp].copy()
 
-    # 【修复】: 用 Period 标签区分两个区间，避免区间重叠时按月分组重复求和
-    p_label_chan = f"{date_range[0]} ~ {date_range[1]}"
-    df_curr_tag = df_curr.copy()
-    df_curr_tag['Period'] = p_label_chan
+    # 【修复】: 用掩码「并集」取行，重叠区间的记录只出现一次，不会重复求和
+    mask_union = mask_curr.copy()
+    if enable_comparison and comp_range and len(comp_range) == 2:
+        mask_union = mask_curr | mask_comp
 
-    frames_chan = [df_curr_tag]
-    sorted_months_chan = [p_label_chan]
-
-    if enable_comparison and comp_range and len(comp_range) == 2 and not df_comp_sidebar.empty:
-        c_label_chan = f"{comp_range[0]} ~ {comp_range[1]}"
-        df_comp_tag = df_comp_sidebar.copy()
-        df_comp_tag['Period'] = c_label_chan
-        frames_chan.insert(0, df_comp_tag)
-        sorted_months_chan = [c_label_chan, p_label_chan]
-
-    df_all_chan = pd.concat(frames_chan, ignore_index=True)
+    df_all_chan = df_sales[mask_union].copy()
+    sorted_months_chan = []
+    if not df_all_chan.empty:
+        df_all_chan['Month'] = df_all_chan['Date'].dt.to_period('M').astype(str)
+        sorted_months_chan = sorted(df_all_chan['Month'].unique())
     
     if df_curr.empty:
         st.warning("No sales data found for the selected date range and warehouses.")
@@ -884,58 +878,72 @@ with tab2:
         # PART 3: Channel & Customer Analysis
         # =========================================================
         st.subheader("2. Channel & Customer Analysis")
-        ar_col1, col_spacer, ar_col2 = st.columns([1, 0.1, 1])
-        
-        with ar_col1:
-            st.caption("📊 Revenue Breakdown by Channel (Comparison Mode)")
-            chan_data = df_all_chan.groupby(['AR Type', 'Period'])['Sales'].sum().reset_index()
-            fig_ar = px.bar(
-                chan_data, x='AR Type', y='Sales', color='Period',
-                barmode='group', text_auto='.2s',
-                category_orders={"Period": sorted_months_chan},
-                color_discrete_sequence=px.colors.qualitative.Pastel
+
+        # --- 上半部分：Channel 图表（全宽）---
+        st.caption("📊 Monthly Revenue Breakdown by Channel (Comparison Mode)")
+        chan_data = df_all_chan.groupby(['AR Type', 'Month'])['Sales'].sum().reset_index()
+
+        # 月份数越多，图表越高一点，避免拥挤
+        n_months = max(len(sorted_months_chan), 1)
+        chan_height = 450 if n_months <= 2 else min(650, 450 + (n_months - 2) * 40)
+
+        fig_ar = px.bar(
+            chan_data, x='AR Type', y='Sales', color='Month',
+            barmode='group', text_auto='.2s',
+            category_orders={"Month": sorted_months_chan},
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig_ar.update_layout(
+            height=chan_height,
+            legend=dict(orientation="h", y=1.12, x=0, title=None),
+            xaxis_title="AR Type",
+            yaxis_title="Sales (RM)",
+            bargap=0.25,
+            bargroupgap=0.05
+        )
+        fig_ar.update_traces(textposition='outside', textfont_size=10)
+        st.plotly_chart(fig_ar, use_container_width=True)
+
+        st.markdown(" ")
+
+        # --- 下半部分：Top Customers（全宽）---
+        st.caption("🏆 Top Customers Analysis")
+        p_label = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
+
+        if not enable_comparison or df_comp_sidebar.empty:
+            # 【修改】: 用 Display Name 替代 AR Name
+            cust_detail = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index()
+            cust_detail = cust_detail.sort_values('Sales', ascending=False).head(50)
+            st.dataframe(
+                cust_detail, hide_index=True, use_container_width=True, height=500,
+                column_config={
+                    "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
+                    "Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")
+                }
             )
-            fig_ar.update_layout(height=450, legend=dict(orientation="h", y=1.15))
-            st.plotly_chart(fig_ar, use_container_width=True)
-                    
-        with ar_col2:
-            st.caption("🏆 Top Customers Analysis")
-            p_label = f"{date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}"
-            
-            if not enable_comparison or df_comp_sidebar.empty:
-                # 【修改】: 用 Display Name 替代 AR Name
-                cust_detail = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index()
-                cust_detail = cust_detail.sort_values('Sales', ascending=False).head(50)
-                st.dataframe(
-                    cust_detail, hide_index=True, use_container_width=True, height=400,
-                    column_config={
-                        "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
-                        "Sales": st.column_config.NumberColumn(p_label, format="RM%.2f")
-                    }
-                )
+        else:
+            c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
+
+            # 【修改】: 用 Display Name 替代 AR Name
+            p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
+            c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
+
+            cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
+            if p_label in cust_detail.columns and c_label in cust_detail.columns:
+                cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
             else:
-                c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
-                
-                # 【修改】: 用 Display Name 替代 AR Name
-                p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
-                c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
-                
-                cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
-                if p_label in cust_detail.columns and c_label in cust_detail.columns:
-                    cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
-                else:
-                    cust_detail['Diff'] = 0
-                cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
-                
-                st.dataframe(
-                    cust_detail, hide_index=True, use_container_width=True, height=400,
-                    column_config={
-                        "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
-                        p_label: st.column_config.NumberColumn(p_label, format="RM%.2f"),
-                        c_label: st.column_config.NumberColumn(c_label, format="RM%.2f"),
-                        "Diff": st.column_config.NumberColumn("Difference", format="RM%.2f")
-                    }
-                )
+                cust_detail['Diff'] = 0
+            cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
+
+            st.dataframe(
+                cust_detail, hide_index=True, use_container_width=True, height=500,
+                column_config={
+                    "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
+                    p_label: st.column_config.NumberColumn(p_label, format="RM%.2f"),
+                    c_label: st.column_config.NumberColumn(c_label, format="RM%.2f"),
+                    "Diff": st.column_config.NumberColumn("Difference", format="RM%.2f")
+                }
+            )
 
         st.divider()
 
