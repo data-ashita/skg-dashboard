@@ -924,24 +924,41 @@ with tab2:
         else:
             c_label = f"{comp_range[0].strftime('%Y-%m-%d')} to {comp_range[1].strftime('%Y-%m-%d')}"
 
-            # 【修改】: 用 Display Name 替代 AR Name
-            p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': p_label})
-            c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': c_label})
+            # 各区间天数，用于换算日均
+            p_days = (pd.to_datetime(date_range[1]) - pd.to_datetime(date_range[0])).days + 1
+            c_days = (pd.to_datetime(comp_range[1]) - pd.to_datetime(comp_range[0])).days + 1
+
+            p_sales = df_curr.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': 'P_Total'})
+            c_sales = df_comp_sidebar.groupby(['AR Type', 'Display Name'])['Sales'].sum().reset_index().rename(columns={'Sales': 'C_Total'})
 
             cust_detail = pd.merge(p_sales, c_sales, on=['AR Type', 'Display Name'], how='outer').fillna(0)
-            if p_label in cust_detail.columns and c_label in cust_detail.columns:
-                cust_detail['Diff'] = cust_detail[p_label] - cust_detail[c_label]
-            else:
-                cust_detail['Diff'] = 0
-            cust_detail = cust_detail.sort_values(p_label, ascending=False).head(50)
+
+            # 日均 + 日均差异（这才是可比的口径）
+            cust_detail['P_Daily'] = cust_detail['P_Total'] / p_days
+            cust_detail['C_Daily'] = cust_detail['C_Total'] / c_days
+            cust_detail['D_Daily'] = cust_detail['P_Daily'] - cust_detail['C_Daily']
+            cust_detail['D_Pct'] = np.where(
+                cust_detail['C_Daily'] > 0,
+                (cust_detail['P_Daily'] - cust_detail['C_Daily']) / cust_detail['C_Daily'] * 100,
+                0
+            )
+
+            cust_detail = cust_detail.sort_values('P_Total', ascending=False).head(50)
+            cust_detail = cust_detail[['AR Type', 'Display Name', 'P_Total', 'P_Daily', 'C_Total', 'C_Daily', 'D_Daily', 'D_Pct']]
+
+            st.caption(f"📏 Primary = {p_days} days · Comparison = {c_days} days — 区间长度不同，请看**日均**对比")
 
             st.dataframe(
                 cust_detail, hide_index=True, use_container_width=True, height=500,
                 column_config={
+                    "AR Type": st.column_config.TextColumn("AR Type", width="small"),
                     "Display Name": st.column_config.TextColumn("Customer / Sub Type"),
-                    p_label: st.column_config.NumberColumn(p_label, format="RM%.2f"),
-                    c_label: st.column_config.NumberColumn(c_label, format="RM%.2f"),
-                    "Diff": st.column_config.NumberColumn("Difference", format="RM%.2f")
+                    "P_Total": st.column_config.NumberColumn(f"{p_label} (Total)", format="RM%.2f"),
+                    "P_Daily": st.column_config.NumberColumn("↳ Per Day", format="RM%.2f"),
+                    "C_Total": st.column_config.NumberColumn(f"{c_label} (Total)", format="RM%.2f"),
+                    "C_Daily": st.column_config.NumberColumn("↳ Per Day", format="RM%.2f"),
+                    "D_Daily": st.column_config.NumberColumn("Δ Per Day", format="RM%.2f"),
+                    "D_Pct": st.column_config.NumberColumn("Δ %", format="%.1f%%"),
                 }
             )
 
